@@ -30,7 +30,6 @@
     <ClInclude Include="RenderingUtility.h" />
     <ClInclude Include="Scene.h" />
     <ClInclude Include="Settings.h" />
-    <ClInclude Include="SpeedupMathFunctions.h" />
     <ClInclude Include="StringParser.h" />
     <ClInclude Include="VolumeRenderer.h" />
   </ItemGroup>
