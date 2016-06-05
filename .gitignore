@@ -9,9 +9,7 @@
 *.pch
 
 # Compiled Dynamic libraries
-*.so
 *.dylib
-*.dll
 
 # Fortran module files
 *.mod
@@ -20,9 +18,14 @@
 *.lai
 *.la
 *.a
-*.lib
 
 # Executables
-*.exe
 *.out
 *.app
+
+#VS
+*.suo
+*.opensdf
+*.pdb
+*.filters
+*.user

@@ -1,0 +1,10 @@
+prefix=F:/OPENEXR/ilmbase-2.1.0/MSBUILD
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+OpenEXR_includedir=${prefix}/include/OpenEXR
+
+Name: IlmBase
+Description: Base math and exception libraries
+Version: 2.1.0
+Libs: -L${libdir} -lImath-2_1 -lIexMath-2_1 -lHalf -lIex-2_1 -lIlmThread-2_1 -pthreadCflags: -pthread -I${OpenEXR_includedir}

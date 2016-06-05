@@ -1,0 +1,105 @@
+﻿Der Buildvorgang wurde am 05.06.2016 12:36:21 gestartet.
+     1>Projekt "F:\Studium_Master_Pascal\MASTER\GitHubRepos\MVNEE\VolumeRendererV2\VolumeRendererV2.vcxproj" auf Knoten "2", Build Ziel(e).
+     1>ClCompile:
+         C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\bin\x86_amd64\CL.exe /c /I..\include /I..\OpenEXRDependencies\include /I..\OpenEXR\include /Zi /nologo /W3 /WX- /sdl /O2 /Oi /GL /D _MBCS /Gm- /EHsc /MD /GS /Gy /fp:precise /Zc:wchar_t /Zc:forScope /openmp /Fo"x64\Release\\" /Fd"x64\Release\vc120.pdb" /Gd /TP /errorReport:prompt Main.cpp StringParser.cpp VolumeRenderer.cpp
+         Main.cpp
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\volumerendererv2\Scene.h(246): warning C4267: 'Initialisierung': Konvertierung von 'size_t' nach 'int', Datenverlust möglich
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\volumerendererv2\Scene.h(272): warning C4267: 'Initialisierung': Konvertierung von 'size_t' nach 'int', Datenverlust möglich
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\volumerendererv2\Scene.h(273): warning C4267: 'Initialisierung': Konvertierung von 'size_t' nach 'int', Datenverlust möglich
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(143): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::ArgExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(143): Siehe Deklaration von 'Iex_2_1::ArgExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(145): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::LogicExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(145): Siehe Deklaration von 'Iex_2_1::LogicExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(150): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::InputExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(150): Siehe Deklaration von 'Iex_2_1::InputExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(152): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::IoExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(152): Siehe Deklaration von 'Iex_2_1::IoExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(154): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::MathExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(154): Siehe Deklaration von 'Iex_2_1::MathExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(158): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::ErrnoExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(158): Siehe Deklaration von 'Iex_2_1::ErrnoExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(163): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::NoImplExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(163): Siehe Deklaration von 'Iex_2_1::NoImplExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(169): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::NullExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(169): Siehe Deklaration von 'Iex_2_1::NullExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(171): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::TypeExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(171): Siehe Deklaration von 'Iex_2_1::TypeExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexr\include\openexr\ImfHeader.h(428): warning C4251: 'Imf_2_1::Header::_map': class 'std::map<Imf_2_1::Name,Imf_2_1::Attribute *,std::less<_Kty>,std::allocator<std::pair<const _Kty,_Ty>>>' erfordert eine DLL-Schnittstelle, die von Clients von class 'Imf_2_1::Header' verwendet wird
+                 with
+                 [
+                     _Kty=Imf_2_1::Name
+         ,            _Ty=Imf_2_1::Attribute *
+                 ]
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexr\include\openexr\ImfFrameBuffer.h(215): warning C4251: 'Imf_2_1::FrameBuffer::_map': class 'std::map<Imf_2_1::Name,Imf_2_1::Slice,std::less<_Kty>,std::allocator<std::pair<const _Kty,_Ty>>>' erfordert eine DLL-Schnittstelle, die von Clients von class 'Imf_2_1::FrameBuffer' verwendet wird
+                 with
+                 [
+                     _Kty=Imf_2_1::Name
+         ,            _Ty=Imf_2_1::Slice
+                 ]
+     1>F:\Studium_Master_Pascal\MASTER\GitHubRepos\MVNEE\OpenEXR\include\OpenEXR/ImfRgbaFile.h(336): warning C4251: 'Imf_2_1::RgbaInputFile::_channelNamePrefix': class 'std::basic_string<char,std::char_traits<char>,std::allocator<char>>' erfordert eine DLL-Schnittstelle, die von Clients von class 'Imf_2_1::RgbaInputFile' verwendet wird
+         StringParser.cpp
+         VolumeRenderer.cpp
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\volumerendererv2\Scene.h(246): warning C4267: 'Initialisierung': Konvertierung von 'size_t' nach 'int', Datenverlust möglich
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\volumerendererv2\Scene.h(272): warning C4267: 'Initialisierung': Konvertierung von 'size_t' nach 'int', Datenverlust möglich
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\volumerendererv2\Scene.h(273): warning C4267: 'Initialisierung': Konvertierung von 'size_t' nach 'int', Datenverlust möglich
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(143): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::ArgExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(143): Siehe Deklaration von 'Iex_2_1::ArgExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(145): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::LogicExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(145): Siehe Deklaration von 'Iex_2_1::LogicExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(150): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::InputExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(150): Siehe Deklaration von 'Iex_2_1::InputExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(152): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::IoExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(152): Siehe Deklaration von 'Iex_2_1::IoExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(154): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::MathExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(154): Siehe Deklaration von 'Iex_2_1::MathExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(158): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::ErrnoExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(158): Siehe Deklaration von 'Iex_2_1::ErrnoExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(163): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::NoImplExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(163): Siehe Deklaration von 'Iex_2_1::NoImplExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(169): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::NullExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(169): Siehe Deklaration von 'Iex_2_1::NullExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(171): warning C4275: class 'Iex_2_1::BaseExc' ist keine DLL-Schnittstelle und wurde als Basisklasse für die DLL-Schnittstelle class 'Iex_2_1::TypeExc' verwendet
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(60): Siehe Deklaration von 'Iex_2_1::BaseExc'
+                 f:\studium_master_pascal\master\githubrepos\mvnee\openexrdependencies\include\IexBaseExc.h(171): Siehe Deklaration von 'Iex_2_1::TypeExc'
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexr\include\openexr\ImfHeader.h(428): warning C4251: 'Imf_2_1::Header::_map': class 'std::map<Imf_2_1::Name,Imf_2_1::Attribute *,std::less<_Kty>,std::allocator<std::pair<const _Kty,_Ty>>>' erfordert eine DLL-Schnittstelle, die von Clients von class 'Imf_2_1::Header' verwendet wird
+                 with
+                 [
+                     _Kty=Imf_2_1::Name
+         ,            _Ty=Imf_2_1::Attribute *
+                 ]
+     1>f:\studium_master_pascal\master\githubrepos\mvnee\openexr\include\openexr\ImfFrameBuffer.h(215): warning C4251: 'Imf_2_1::FrameBuffer::_map': class 'std::map<Imf_2_1::Name,Imf_2_1::Slice,std::less<_Kty>,std::allocator<std::pair<const _Kty,_Ty>>>' erfordert eine DLL-Schnittstelle, die von Clients von class 'Imf_2_1::FrameBuffer' verwendet wird
+                 with
+                 [
+                     _Kty=Imf_2_1::Name
+         ,            _Ty=Imf_2_1::Slice
+                 ]
+     1>F:\Studium_Master_Pascal\MASTER\GitHubRepos\MVNEE\OpenEXR\include\OpenEXR/ImfRgbaFile.h(336): warning C4251: 'Imf_2_1::RgbaInputFile::_channelNamePrefix': class 'std::basic_string<char,std::char_traits<char>,std::allocator<char>>' erfordert eine DLL-Schnittstelle, die von Clients von class 'Imf_2_1::RgbaInputFile' verwendet wird
+       Link:
+         C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\bin\x86_amd64\link.exe /ERRORREPORT:PROMPT /OUT:"F:\Studium_Master_Pascal\MASTER\GitHubRepos\MVNEE\x64\Release\VolumeRendererV2.exe" /NOLOGO /LIBPATH:..\lib /LIBPATH:..\OpenEXRDependencies\lib /LIBPATH:..\OpenEXR\lib embree.lib zlib.lib zlibstatic.lib Half.lib "Iex-2_1.lib" "IexMath-2_1.lib" "IlmThread-2_1.lib" "Imath-2_1.lib" "IlmImf-2_1.lib" kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"F:\Studium_Master_Pascal\MASTER\GitHubRepos\MVNEE\x64\Release\VolumeRendererV2.pdb" /OPT:REF /OPT:ICF /LTCG /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:"F:\Studium_Master_Pascal\MASTER\GitHubRepos\MVNEE\x64\Release\VolumeRendererV2.lib" /MACHINE:X64 /PROFILE x64\Release\Main.obj
+         x64\Release\StringParser.obj
+         x64\Release\VolumeRenderer.obj
+         Code wird generiert.
+         Codegenerierung ist abgeschlossen.
+         VolumeRendererV2.vcxproj -> F:\Studium_Master_Pascal\MASTER\GitHubRepos\MVNEE\x64\Release\VolumeRendererV2.exe
+     1>Die Erstellung des Projekts "F:\Studium_Master_Pascal\MASTER\GitHubRepos\MVNEE\VolumeRendererV2\VolumeRendererV2.vcxproj" ist abgeschlossen, Build Ziel(e).
+
+Build erfolgreich.
+
+Verstrichene Zeit 00:00:02.74
