@@ -153,7 +153,7 @@ void VolumeRenderer::renderScene()
 			//contribute to pixel
 			frameBuffer[frameBufferIndex] = pixelContribution;			
 		}
-		cout << "row " << j << " finished" << endl;
+		//cout << "row " << j << " finished" << endl;
 	}
 
 	//Stop time measurement
