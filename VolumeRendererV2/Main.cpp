@@ -32,35 +32,40 @@ int main(int argc, const char* argv[])
 	//create and fill scene
 	Scene* sceneObject = new Scene(scene);
 
+	Medium mediumSetting;
+	Rendering renderingSetting;
+	bool xmlParsingSuccessful = false;
+
 	if (argc == 1) {
 		cout << "No scene file provided: Default Settings used." << endl;
-		sceneObject->readSceneXML("../setups/default.xml");
+		xmlParsingSuccessful = sceneObject->readSceneXML("../setups/default.xml", &renderingSetting, &mediumSetting);
 	}
 	else if (argc == 2) {
 		//scene file potentially provided
 		string settingsFilePath = argv[1];
-		sceneObject->readSceneXML(settingsFilePath);
+		xmlParsingSuccessful = sceneObject->readSceneXML(settingsFilePath, &renderingSetting, &mediumSetting);
 	}
 
-	bool geometryIncluded = true;
-	if (geometryIncluded) {
-		sceneObject->addGroundPlane("groundPlane", vec3(0.3f, 0.5f, 0.3f), 10.0f, -1.0f);
-		unsigned int objID1 = sceneObject->addObject("../models/suzanne.obj", "suzanne", vec3(0.0f, 1.0f, 1.0f), vec3(-1.0f, 0.5f, -0.5f), 0.6f);
-		//unsigned int objID = sceneObject->addObject("../models/GitterModell/gitter_square.obj", "gitter", vec3(0.11f, 0.1f, 0.1f), vec3(0.0f, 0.5f, 2.0f), 0.5f);
-		//unsigned int objID2 = sceneObject->addObject("../models/GitterModell/gitter_schraeg.obj", "gitter", vec3(0.1f, 0.1f, 0.1f), vec3(0.0f, 0.8f, 0.0f), 1.0f);
-		//unsigned int objID2 = sceneObject->addObject("../models/GitterModell/gitter_symmetrisch_schraeg.obj", "gitter", vec3(0.1f, 0.1f, 0.1f), vec3(0.0f, 0.8f, 0.0f), 1.0f);
-		//unsigned int objID2 = sceneObject->addObject("../models/lochplatte/LochInMitte.obj", "gitter", vec3(0.1f, 0.1f, 0.1f), vec3(0.0f, 0.8f, 0.0f), 1.0f);
-		//unsigned int objID2 = sceneObject->addObject("../models/GitterModell/cross.obj", "cross", vec3(0.1f, 0.1f, 0.1f), vec3(0.0f, 1.0f, 1.0f), 0.5f);
-		//unsigned int objID2 = sceneObject->addObject("../models/GitterModell/cross_sides.obj", "cross", vec3(0.1f, 0.1f, 0.1f), vec3(0.0f, 1.2f, 1.0f), 0.6f);
-		unsigned int objID3 = sceneObject->addObject("../models/sphere.obj", "sphere", vec3(1.0f, 1.0f, 0.0f), vec3(2.0f, 0.0f, 0.5f), 0.6f);				
+	if (!xmlParsingSuccessful) {
+		cout << "invalid object file path: exit program" << endl;
+		rtcDeleteScene(scene);
+		rtcDeleteDevice(device);
 
+		cout << "exit program by typing a letter..." << endl;
+		string s;
+		cin >> s;
+
+		exit(EXIT_FAILURE);
 	}
+	
+	//commit after all scene geometry is finished
+	rtcCommit(scene);
 
 	//commit after all scene geometry is finished
 	rtcCommit(scene);
 
 	//create volumeRenderer and start rendering
-	VolumeRenderer* volumeRenderer = new VolumeRenderer(scene, sceneObject);
+	VolumeRenderer* volumeRenderer = new VolumeRenderer(scene, sceneObject, mediumSetting, renderingSetting);
 	volumeRenderer->renderScene();	
 	//volumeRenderer->renderSceneWithMaximalDuration(5.0);
 	//volumeRenderer->renderSceneWithMaximalDuration(60.0f);

@@ -16,8 +16,6 @@
 
 using namespace std;
 using glm::vec3;
-using MediumParameters::mu_s;
-using MediumParameters::mu_t;
 
 
 #if defined _WIN32 && !defined OSG_LIBRARY_STATIC 
@@ -36,6 +34,8 @@ class VolumeRenderer
 private:
 	RTCScene sceneGeometry;
 	Scene* scene;
+	Medium medium;
+	Rendering rendering;
 
 	double sigmaForHG;
 
@@ -47,32 +47,25 @@ private:
 	//random generator, one for every thread (maximum 16 threads?)
 	std::random_device rd;
 	//mersenne twister random generator
-	std::mt19937 mt[RenderingSettings::THREAD_COUNT];
+	std::mt19937* mt;
 	//for equally distributed random values between 0.0 and 1.0
-	std::uniform_real_distribution<double> distribution[RenderingSettings::THREAD_COUNT];
+	std::uniform_real_distribution<double>* distribution;
 
 	//for gaussian distribution
-	std::normal_distribution<double> gaussStandardDist[RenderingSettings::THREAD_COUNT];
+	std::normal_distribution<double>* gaussStandardDist;
 
 	//Every thread has its own Path:
-	Path* pathTracingPaths[RenderingSettings::THREAD_COUNT];
+	Path** pathTracingPaths;
 	//seed and perturbed vertex arrays pre-initialized
-	vec3* seedVertices[RenderingSettings::THREAD_COUNT];
-	vec3* perturbedVertices[RenderingSettings::THREAD_COUNT];
+	vec3** seedVertices;
+	vec3** perturbedVertices;
 	//arrays for the pdfs of all estimators
-	double* estimatorPDFs[RenderingSettings::THREAD_COUNT];
+	double** estimatorPDFs;
 	//pdfs for path tracing up to a specific vertex position
-	double* cumulatedPathTracingPDFs[RenderingSettings::THREAD_COUNT];
+	double** cumulatedPathTracingPDFs;
 	//arrays for the seed path segment lengths
-	float* seedSegmentLengths[RenderingSettings::THREAD_COUNT];
-	double* seedSegmentLengthSquares[RenderingSettings::THREAD_COUNT];
-
-	glm::int64 successfulPathCounter[RenderingSettings::THREAD_COUNT];
-	glm::int64 occludedPathCounter[RenderingSettings::THREAD_COUNT];
-	glm::int64 segmentsTooShortCounter[RenderingSettings::THREAD_COUNT];
-	glm::int64 successfullyCreatedPaths[RenderingSettings::THREAD_COUNT];
-	glm::int64 rejectedSuccessfulPaths[RenderingSettings::THREAD_COUNT];
-
+	float** seedSegmentLengths;
+	double** seedSegmentLengthSquares;
 
 	//frame buffer:
 	vec3* frameBuffer;
@@ -85,7 +78,7 @@ private:
 	vec3 (VolumeRenderer::*integrator)(const vec3& rayOrigin, const vec3& rayDir) = NULL;
 
 public:
-	VolumeRenderer(RTCScene sceneGeometry, Scene* scene);
+	VolumeRenderer(RTCScene sceneGeometry, Scene* scene, Medium& medium, Rendering& rendering);
 	~VolumeRenderer();
 
 	void renderScene();

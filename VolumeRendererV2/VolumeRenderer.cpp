@@ -1,35 +1,59 @@
 #include "VolumeRenderer.h"
 
-VolumeRenderer::VolumeRenderer(RTCScene sceneGeometry, Scene* scene) : 
+VolumeRenderer::VolumeRenderer(RTCScene sceneGeometry, Scene* scene, Medium& medium, Rendering& rendering) :
 	sceneGeometry(sceneGeometry),
-	scene(scene)
+	scene(scene),
+	medium(medium),
+	rendering(rendering)
 {
+	//if sequential execution wished, set omp thread count to 1
+	if (rendering.RENDER_PARALLEL) {
+		//assert(omp_get_max_threads() >= rendering.THREAD_COUNT);
+		if (omp_get_max_threads() < rendering.THREAD_COUNT) {
+			cout << "specified THREAD_COUNT = " << rendering.THREAD_COUNT << " exceeds maximum value of the machine: " << omp_get_max_threads() << endl;
+			cout << "please change thread count to a value in range [1, " << omp_get_max_threads() << "]" << endl;
+			cout << "exit program by typing a letter..." << endl;
+			string s;
+			cin >> s;
+			exit(EXIT_FAILURE);
+		}
+
+	}
+
+
+	const int threadCount = rendering.THREAD_COUNT;
+	//initialize arrays
+	mt = new std::mt19937[threadCount];
+	distribution = new std::uniform_real_distribution<double>[threadCount];
+	gaussStandardDist = new std::normal_distribution<double>[threadCount];
+	pathTracingPaths = new Path*[threadCount];
+	seedVertices = new vec3*[threadCount];
+	perturbedVertices = new vec3*[threadCount];
+	estimatorPDFs = new double*[threadCount];
+	cumulatedPathTracingPDFs = new double*[threadCount];
+	seedSegmentLengths = new float*[threadCount];
+	seedSegmentLengthSquares = new double*[threadCount];
+
 	//initialize per thread data
-	for (int i = 0; i < RenderingSettings::THREAD_COUNT; i++) {
+	for (int i = 0; i < threadCount; i++) {
 		mt[i] = std::mt19937(rd());
 		distribution[i] = std::uniform_real_distribution<double>(0.0, 1.0);
 		gaussStandardDist[i] = std::normal_distribution<double>(0.0, 1.0);
 
 		//arrays:
-		seedVertices[i] = new vec3[RenderingSettings::MAX_SEGMENT_COUNT];
-		perturbedVertices[i] = new vec3[RenderingSettings::MAX_SEGMENT_COUNT];
-		seedSegmentLengths[i] = new float[RenderingSettings::MAX_SEGMENT_COUNT];
-		seedSegmentLengthSquares[i] = new double[RenderingSettings::MAX_SEGMENT_COUNT];
-		estimatorPDFs[i] = new double[RenderingSettings::MAX_SEGMENT_COUNT];
-		cumulatedPathTracingPDFs[i] = new double[RenderingSettings::MAX_SEGMENT_COUNT + 1];
-		
-		successfulPathCounter[i] = 0;
-		occludedPathCounter[i] = 0;
-		segmentsTooShortCounter[i] = 0;
-		successfullyCreatedPaths[i] = 0;
-		rejectedSuccessfulPaths[i] = 0;
+		seedVertices[i] = new vec3[rendering.MAX_SEGMENT_COUNT];
+		perturbedVertices[i] = new vec3[rendering.MAX_SEGMENT_COUNT];
+		seedSegmentLengths[i] = new float[rendering.MAX_SEGMENT_COUNT];
+		seedSegmentLengthSquares[i] = new double[rendering.MAX_SEGMENT_COUNT];
+		estimatorPDFs[i] = new double[rendering.MAX_SEGMENT_COUNT];
+		cumulatedPathTracingPDFs[i] = new double[rendering.MAX_SEGMENT_COUNT + 1];
 
 		pathTracingPaths[i] = new Path();
 	}
-	frameBuffer = new vec3[RenderingSettings::HEIGHT * RenderingSettings::WIDTH];
+	frameBuffer = new vec3[rendering.HEIGHT * rendering.WIDTH];
 
 	//given the mean cosine, calculate the appropriate sigmaForHg_scaledForMFP:
-	float t = MediumParameters::hg_g_F * 10.0f;
+	float t = medium.hg_g_F * 10.0f;
 	int lower = (int)floorf(t);
 	int upper = (int)ceilf(t);
 	double misWeight = t - floorf(t);
@@ -47,8 +71,8 @@ VolumeRenderer::~VolumeRenderer()
 	delete[] frameBuffer;
 	delete scene;
 
-	//initialize per thread data
-	for (int i = 0; i < RenderingSettings::THREAD_COUNT; i++) {
+	//delete per thread data
+	for (int i = 0; i < rendering.THREAD_COUNT; i++) {
 		//delete arrays:
 		Path* pathPointer = pathTracingPaths[i];
 		delete pathPointer;
@@ -58,22 +82,33 @@ VolumeRenderer::~VolumeRenderer()
 		delete[] perturbedVertices[i];
 		delete[] seedSegmentLengths[i];
 		delete[] seedSegmentLengthSquares[i];
-		delete[] estimatorPDFs[i];
-			
+		delete[] estimatorPDFs[i];			
 	}
+
+	//delete arrays:
+	delete[] mt;
+	delete[] distribution;
+	delete[] gaussStandardDist;
+	delete[] pathTracingPaths;
+	delete[] seedVertices;
+	delete[] perturbedVertices;
+	delete[] estimatorPDFs;
+	delete[] cumulatedPathTracingPDFs;
+	delete[] seedSegmentLengths;
+	delete[] seedSegmentLengthSquares;
 }
 
 void VolumeRenderer::renderScene()
 {
 	//if sequential execution wished, set omp thread count to 1
-	if (RenderingSettings::RENDER_PARALLEL) {
-		//assert(omp_get_max_threads() >= RenderingSettings::THREAD_COUNT);
-		if (omp_get_max_threads() >= RenderingSettings::THREAD_COUNT) {
-			omp_set_num_threads(RenderingSettings::THREAD_COUNT);
+	if (rendering.RENDER_PARALLEL) {
+		//assert(omp_get_max_threads() >= rendering.THREAD_COUNT);
+		if (omp_get_max_threads() >= rendering.THREAD_COUNT) {
+			omp_set_num_threads(rendering.THREAD_COUNT);
 			cout << "max num omp threads = " << omp_get_max_threads() << endl;
 		}
 		else {
-			cout << "specified THREAD_COUNT = " << RenderingSettings::THREAD_COUNT << " exceeds maximum value of the machine: " << omp_get_max_threads() << endl;
+			cout << "specified THREAD_COUNT = " << rendering.THREAD_COUNT << " exceeds maximum value of the machine: " << omp_get_max_threads() << endl;
 			cout << "please change THREAD_COUNT in Settings.h to a value in range [1, " << omp_get_max_threads() << "]" << endl;
 			cout << "exit program by typing a letter..." << endl;
 			string s;
@@ -89,7 +124,7 @@ void VolumeRenderer::renderScene()
 
 
 	//choose the integrator:
-	switch (RenderingSettings::integrator) {
+	switch (rendering.integrator) {
 		case TEST_RENDERING: integrator = &VolumeRenderer::intersectionTestRendering; break;
 		case PATH_TRACING_NO_SCATTERING: integrator = &VolumeRenderer::pathTracingNoScattering; break;
 		case PATH_TRACING_NEE_MIS_NO_SCATTERING: integrator = &VolumeRenderer::pathTracing_NEE_MIS_NoScattering; break;
@@ -108,11 +143,11 @@ void VolumeRenderer::renderScene()
 	measureStart = std::chrono::system_clock::now();
 
 
-	float pixelWidth = scene->camera.imagePlaneWidth / (float)RenderingSettings::WIDTH;
-	float pixelHeight = scene->camera.imagePlaneHeight / (float)RenderingSettings::HEIGHT;
+	float pixelWidth = scene->camera.imagePlaneWidth / (float)rendering.WIDTH;
+	float pixelHeight = scene->camera.imagePlaneHeight / (float)rendering.HEIGHT;
 	vec3 pixelStartPos = scene->camera.cameraOrigin - ((scene->camera.imagePlaneWidth + pixelWidth) / 2.0f) * scene->camera.camRight - ((scene->camera.imagePlaneHeight + pixelHeight) / 2.0f) * scene->camera.camUp + scene->camera.distanceToImagePlane * scene->camera.camLookAt;
 	
-	const float num_samples = (float)RenderingSettings::SAMPLE_COUNT;
+	const float num_samples = (float)rendering.SAMPLE_COUNT;
 	
 	//shoot ray through every pixel
 #if defined _WIN32
@@ -120,19 +155,19 @@ void VolumeRenderer::renderScene()
 #else
 	#pragma omp parallel for schedule(dynamic) collapse(2)	
 #endif
-	for (int j = 0; j < RenderingSettings::HEIGHT; j++) {
-		for (int i = 0; i < RenderingSettings::WIDTH; i++) {
+	for (int j = 0; j < rendering.HEIGHT; j++) {
+		for (int i = 0; i < rendering.WIDTH; i++) {
 			int threadID = omp_get_thread_num();
 			int frameBufferIndex;
 
-			frameBufferIndex = i + j * RenderingSettings::WIDTH;
+			frameBufferIndex = i + j * rendering.WIDTH;
 			vec3 pixelContribution = vec3(0.0f);
 
 			//pivot position for subpixel sampling
 			vec3 currentPixelOrigin = pixelStartPos + (float)i *pixelWidth * scene->camera.camRight + (float)j * pixelHeight * scene->camera.camUp;
 
 			//multiple random walks per pixel:
-			for (int sample = 0; sample < RenderingSettings::SAMPLE_COUNT; sample++) {
+			for (int sample = 0; sample < rendering.SAMPLE_COUNT; sample++) {
 				//sample position within pixel rectangle:
 				float xDiff = (float)sample1D(threadID) * pixelWidth;
 				float yDiff = (float)sample1D(threadID) * pixelHeight;
@@ -162,20 +197,20 @@ void VolumeRenderer::renderScene()
 	auto durationV = std::chrono::duration_cast<std::chrono::microseconds>(measureStop - measureStart).count();
 	double duration = (double)durationV / (60.0 * 1000000.0);
 
-	printRenderingParameters(RenderingSettings::SAMPLE_COUNT, duration);
+	printRenderingParameters(rendering.SAMPLE_COUNT, duration);
 	printCounters();
 
-	writeBufferToFloatFile(RenderingSettings::sessionName, RenderingSettings::WIDTH, RenderingSettings::HEIGHT, frameBuffer);
+	writeBufferToFloatFile(rendering.sessionName, rendering.WIDTH, rendering.HEIGHT, frameBuffer);
 
 #if defined ENABLE_OPEN_EXR
-	string openExrFileName = RenderingSettings::sessionName;
+	string openExrFileName = rendering.sessionName;
 	openExrFileName.append(".exr");
-	saveBufferToOpenEXR(openExrFileName.c_str(), frameBuffer, RenderingSettings::WIDTH, RenderingSettings::HEIGHT);
+	saveBufferToOpenEXR(openExrFileName.c_str(), frameBuffer, rendering.WIDTH, rendering.HEIGHT);
 #endif
 
-	string tgaFileName = RenderingSettings::sessionName;
+	string tgaFileName = rendering.sessionName;
 	tgaFileName.append(".tga");
-	saveBufferToTGA(tgaFileName.c_str(), frameBuffer, RenderingSettings::WIDTH, RenderingSettings::HEIGHT);	
+	saveBufferToTGA(tgaFileName.c_str(), frameBuffer, rendering.WIDTH, rendering.HEIGHT);	
 
 	vec3 mib = calcMeanImageBrightnessBlockwise();
 }
@@ -186,14 +221,14 @@ void VolumeRenderer::renderScene()
 void VolumeRenderer::renderSceneWithMaximalDuration(double maxDurationMinutes)
 {
 	//if sequential execution wished, set omp thread count to 1
-	if (RenderingSettings::RENDER_PARALLEL) {
-		//assert(omp_get_max_threads() >= RenderingSettings::THREAD_COUNT);
-		if (omp_get_max_threads() >= RenderingSettings::THREAD_COUNT) {
-			omp_set_num_threads(RenderingSettings::THREAD_COUNT);
+	if (rendering.RENDER_PARALLEL) {
+		//assert(omp_get_max_threads() >= rendering.THREAD_COUNT);
+		if (omp_get_max_threads() >= rendering.THREAD_COUNT) {
+			omp_set_num_threads(rendering.THREAD_COUNT);
 			cout << "max num omp threads = " << omp_get_max_threads() << endl;
 		}
 		else {
-			cout << "specified THREAD_COUNT = " << RenderingSettings::THREAD_COUNT << " exceeds maximum value of the machine: " << omp_get_max_threads() << endl;
+			cout << "specified THREAD_COUNT = " << rendering.THREAD_COUNT << " exceeds maximum value of the machine: " << omp_get_max_threads() << endl;
 			cout << "please change THREAD_COUNT in Settings.h to a value in range [1, " << omp_get_max_threads() << "]" << endl;
 			cout << "exit program by typing a letter..." << endl;
 			string s;
@@ -209,7 +244,7 @@ void VolumeRenderer::renderSceneWithMaximalDuration(double maxDurationMinutes)
 
 
 	//choose the integrator:
-	switch (RenderingSettings::integrator) {
+	switch (rendering.integrator) {
 		case TEST_RENDERING: integrator = &VolumeRenderer::intersectionTestRendering; break;
 		case PATH_TRACING_NO_SCATTERING: integrator = &VolumeRenderer::pathTracingNoScattering; break;
 		case PATH_TRACING_NEE_MIS_NO_SCATTERING: integrator = &VolumeRenderer::pathTracing_NEE_MIS_NoScattering; break;
@@ -217,15 +252,12 @@ void VolumeRenderer::renderSceneWithMaximalDuration(double maxDurationMinutes)
 		case PATH_TRACING_NEE_MIS: integrator = &VolumeRenderer::pathTracing_NEE_MIS; break;
 		case PATH_TRACING_MVNEE: integrator = &VolumeRenderer::pathTracing_MVNEE; break;
 		case PATH_TRACING_MVNEE_FINAL: integrator = &VolumeRenderer::pathTracing_MVNEE_FINAL; break;
-		/*case PATH_TRACING_MVNEE_OPTIMIZED: integrator = &VolumeRenderer::pathTracing_MVNEE_Optimized; break;
-		case PATH_TRACING_MVNEE_OPTIMIZED2: integrator = &VolumeRenderer::pathTracing_MVNEE_Optimized2; break;
-		case PATH_TRACING_MVNEE_OPTIMIZED3: integrator = &VolumeRenderer::pathTracing_MVNEE_Optimized3; break;*/
 		case PATH_TRACING_MVNEE_GAUSS_PERTURB: integrator = &VolumeRenderer::pathTracing_MVNEE_GaussPerturb; break;
 		case PATH_TRACING_MVNEE_Constants_ALPHA: integrator = &VolumeRenderer::pathTracing_MVNEE_ConstantsAlpha; break;
 	}	
 
-	float pixelWidth = scene->camera.imagePlaneWidth / (float)RenderingSettings::WIDTH;
-	float pixelHeight = scene->camera.imagePlaneHeight / (float)RenderingSettings::HEIGHT;
+	float pixelWidth = scene->camera.imagePlaneWidth / (float)rendering.WIDTH;
+	float pixelHeight = scene->camera.imagePlaneHeight / (float)rendering.HEIGHT;
 	vec3 pixelStartPos = scene->camera.cameraOrigin - ((scene->camera.imagePlaneWidth + pixelWidth) / 2.0f) * scene->camera.camRight - ((scene->camera.imagePlaneHeight + pixelHeight) / 2.0f) * scene->camera.camUp + scene->camera.distanceToImagePlane * scene->camera.camLookAt;
 
 	
@@ -242,12 +274,12 @@ void VolumeRenderer::renderSceneWithMaximalDuration(double maxDurationMinutes)
 
 		//#pragma omp parallel for schedule(dynamic) collapse(2)
 		#pragma omp parallel for schedule(dynamic)
-		for (int j = 0; j < RenderingSettings::HEIGHT; j++) {
-			for (int i = 0; i < RenderingSettings::WIDTH; i++) {
+		for (int j = 0; j < rendering.HEIGHT; j++) {
+			for (int i = 0; i < rendering.WIDTH; i++) {
 				int threadID = omp_get_thread_num();
 				int frameBufferIndex;
 
-				frameBufferIndex = i + j * RenderingSettings::WIDTH;
+				frameBufferIndex = i + j * rendering.WIDTH;
 
 				//pivot position for subpixel sampling
 				vec3 currentPixelOrigin = pixelStartPos + (float)i *pixelWidth * scene->camera.camRight + (float)j * pixelHeight * scene->camera.camUp;
@@ -286,9 +318,9 @@ void VolumeRenderer::renderSceneWithMaximalDuration(double maxDurationMinutes)
 	}
 
 	int frameBufferIndex;
-	for (int j = 0; j < RenderingSettings::HEIGHT; j++) {
-		for (int i = 0; i < RenderingSettings::WIDTH; i++) {
-			frameBufferIndex = i + j * RenderingSettings::WIDTH;
+	for (int j = 0; j < rendering.HEIGHT; j++) {
+		for (int i = 0; i < rendering.WIDTH; i++) {
+			frameBufferIndex = i + j * rendering.WIDTH;
 			frameBuffer[frameBufferIndex] /= (float)samples;
 		}
 	}	
@@ -296,17 +328,17 @@ void VolumeRenderer::renderSceneWithMaximalDuration(double maxDurationMinutes)
 	printRenderingParameters(samples, currentDuration);	
 	printCounters();
 
-	writeBufferToFloatFile(RenderingSettings::sessionName, RenderingSettings::WIDTH, RenderingSettings::HEIGHT, frameBuffer);
+	writeBufferToFloatFile(rendering.sessionName, rendering.WIDTH, rendering.HEIGHT, frameBuffer);
 
 #if defined ENABLE_OPEN_EXR
-	string openExrFileName = RenderingSettings::sessionName;
+	string openExrFileName = rendering.sessionName;
 	openExrFileName.append(".exr");
-	saveBufferToOpenEXR(openExrFileName.c_str(), frameBuffer, RenderingSettings::WIDTH, RenderingSettings::HEIGHT);
+	saveBufferToOpenEXR(openExrFileName.c_str(), frameBuffer, rendering.WIDTH, rendering.HEIGHT);
 #endif
 
-	string tgaFileName = RenderingSettings::sessionName;
+	string tgaFileName = rendering.sessionName;
 	tgaFileName.append(".tga");
-	saveBufferToTGA(tgaFileName.c_str(), frameBuffer, RenderingSettings::WIDTH, RenderingSettings::HEIGHT);
+	saveBufferToTGA(tgaFileName.c_str(), frameBuffer, rendering.WIDTH, rendering.HEIGHT);
 
 	vec3 mib = calcMeanImageBrightnessBlockwise();
 }
@@ -315,16 +347,16 @@ vec3 VolumeRenderer::calcMeanImageBrightnessBlockwise()
 {
 	vec3 meanImageBrightness = vec3(0.0f);
 
-	vec3 meanBrightnessBlocks[RenderingSettings::TILES_SIDE][RenderingSettings::TILES_SIDE];
-	int blockWidth = RenderingSettings::WIDTH / RenderingSettings::TILES_SIDE;
-	int blockHeight = RenderingSettings::HEIGHT / RenderingSettings::TILES_SIDE;	
+	vec3 meanBrightnessBlocks[Constants::TILES_SIDE][Constants::TILES_SIDE];
+	int blockWidth = rendering.WIDTH / Constants::TILES_SIDE;
+	int blockHeight = rendering.HEIGHT / Constants::TILES_SIDE;	
 
-	int lastBlockWidth = blockWidth + RenderingSettings::WIDTH % RenderingSettings::TILES_SIDE;
-	int lastBlockHeight = blockHeight + RenderingSettings::HEIGHT % RenderingSettings::TILES_SIDE;
+	int lastBlockWidth = blockWidth + rendering.WIDTH % Constants::TILES_SIDE;
+	int lastBlockHeight = blockHeight + rendering.HEIGHT % Constants::TILES_SIDE;
 
 	//calculate mean image brightness per block
-	for (int y = 0; y < RenderingSettings::TILES_SIDE; y++) {
-		for (int x = 0; x < RenderingSettings::TILES_SIDE; x++) {
+	for (int y = 0; y < Constants::TILES_SIDE; y++) {
+		for (int x = 0; x < Constants::TILES_SIDE; x++) {
 			vec3 block_mib = vec3(0.0f);
 			int startX = x * blockWidth;
 			int startY = y * blockHeight;
@@ -332,10 +364,10 @@ vec3 VolumeRenderer::calcMeanImageBrightnessBlockwise()
 			int currWidth = blockWidth;
 			int currHeight = blockHeight;
 
-			if (x == RenderingSettings::TILES_SIDE - 1) {
+			if (x == Constants::TILES_SIDE - 1) {
 				currWidth = lastBlockWidth;
 			}
-			if (y == RenderingSettings::TILES_SIDE - 1) {
+			if (y == Constants::TILES_SIDE - 1) {
 				currHeight = lastBlockHeight;
 			}
 
@@ -344,14 +376,14 @@ vec3 VolumeRenderer::calcMeanImageBrightnessBlockwise()
 			for (int j = 0; j < currHeight; j++) {
 				for (int i = 0; i < currWidth; i++) {
 					int widthIndex = startX + i;
-					/*if (widthIndex >= RenderingSettings::WIDTH) {
+					/*if (widthIndex >= rendering.WIDTH) {
 						cout << "width index out of bounds!" << endl;
 					}*/
 					int heightIndex = startY + j;
-					/*if (heightIndex >= RenderingSettings::HEIGHT) {
+					/*if (heightIndex >= rendering.HEIGHT) {
 						cout << "height index out of bounds!" << endl;
 					}*/
-					int index = widthIndex + heightIndex * RenderingSettings::WIDTH;
+					int index = widthIndex + heightIndex * rendering.WIDTH;
 					vec3 currentPixel = frameBuffer[index];
 					block_mib += currentPixel;
 					meanImageBrightness += currentPixel;
@@ -362,14 +394,14 @@ vec3 VolumeRenderer::calcMeanImageBrightnessBlockwise()
 	}
 
 	//entire image brightness
-	meanImageBrightness = meanImageBrightness / ((float)(RenderingSettings::WIDTH) * (float)(RenderingSettings::HEIGHT));
+	meanImageBrightness = meanImageBrightness / ((float)(rendering.WIDTH) * (float)(rendering.HEIGHT));
 
 	//save textual output
-	string blockMIBFileRED = RenderingSettings::sessionName;
+	string blockMIBFileRED = rendering.sessionName;
 	blockMIBFileRED.append("_RED.mib");
 	ofstream oR(blockMIBFileRED.c_str(), ios::out);
-	for (int j = 0; j < RenderingSettings::TILES_SIDE; j++) {
-		for (int i = 0; i < RenderingSettings::TILES_SIDE; i++) {
+	for (int j = 0; j < Constants::TILES_SIDE; j++) {
+		for (int i = 0; i < Constants::TILES_SIDE; i++) {
 			oR << meanBrightnessBlocks[i][j].r << ", ";
 		}
 		oR << endl;
@@ -379,11 +411,11 @@ vec3 VolumeRenderer::calcMeanImageBrightnessBlockwise()
 	//close the file
 	oR.close();
 
-	string blockMIBFileGREEN = RenderingSettings::sessionName;
+	string blockMIBFileGREEN = rendering.sessionName;
 	blockMIBFileGREEN.append("_GREEN.mib");
 	ofstream oG(blockMIBFileGREEN.c_str(), ios::out);
-	for (int j = 0; j < RenderingSettings::TILES_SIDE; j++) {
-		for (int i = 0; i < RenderingSettings::TILES_SIDE; i++) {
+	for (int j = 0; j < Constants::TILES_SIDE; j++) {
+		for (int i = 0; i < Constants::TILES_SIDE; i++) {
 			oG << meanBrightnessBlocks[i][j].g << ", ";
 		}
 		oG << endl;
@@ -393,11 +425,11 @@ vec3 VolumeRenderer::calcMeanImageBrightnessBlockwise()
 	//close the file
 	oG.close();
 
-	string blockMIBFileBLUE = RenderingSettings::sessionName;
+	string blockMIBFileBLUE = rendering.sessionName;
 	blockMIBFileBLUE.append("_BLUE.mib");
 	ofstream oB(blockMIBFileBLUE.c_str(), ios::out);
-	for (int j = 0; j < RenderingSettings::TILES_SIDE; j++) {
-		for (int i = 0; i < RenderingSettings::TILES_SIDE; i++) {
+	for (int j = 0; j < Constants::TILES_SIDE; j++) {
+		for (int i = 0; i < Constants::TILES_SIDE; i++) {
 			oB << meanBrightnessBlocks[i][j].b << ", ";
 		}
 		oB << endl;
@@ -460,7 +492,7 @@ vec3 VolumeRenderer::pathTracingNoScattering(const vec3& rayOrigin, const vec3& 
 	vec3 currDir = rayDir;
 	int currSegmentLength = 0;
 
-	while (currSegmentLength < RenderingSettings::MAX_SEGMENT_COUNT) {
+	while (currSegmentLength < rendering.MAX_SEGMENT_COUNT) {
 
 		//intersect scene
 		RTCRay ray;
@@ -538,7 +570,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS_NoScattering(const vec3& rayOrigin, con
 
 	int currSegmentLength = 0;
 
-	while (currSegmentLength < RenderingSettings::MAX_SEGMENT_COUNT) {
+	while (currSegmentLength < rendering.MAX_SEGMENT_COUNT) {
 
 		//intersect scene
 		RTCRay ray;
@@ -688,10 +720,10 @@ vec3 VolumeRenderer::pathTracingRandomWalk(const vec3& rayOrigin, const vec3& ra
 	vec3 currDir = rayDir;
 	int currSegmentLength = 0;
 
-	while (currSegmentLength < RenderingSettings::MAX_SEGMENT_COUNT) {
+	while (currSegmentLength < rendering.MAX_SEGMENT_COUNT) {
 
 		//sample free path Lenth
-		double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), MediumParameters::mu_t);
+		double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), medium.mu_t);
 
 		//intersect scene
 		RTCRay ray;
@@ -708,7 +740,7 @@ vec3 VolumeRenderer::pathTracingRandomWalk(const vec3& rayOrigin, const vec3& ra
 
 					//Normal culling at light source
 					if (scene->lightSource->validHitDirection(currDir)) {
-						double transmittance = exp(-MediumParameters::mu_t * ray.tfar);
+						double transmittance = exp(-medium.mu_t * ray.tfar);
 						double GLight = (double)cosThetaLight / ((double)ray.tfar * (double)ray.tfar);
 						assert(isfinite(GLight));
 
@@ -746,7 +778,7 @@ vec3 VolumeRenderer::pathTracingRandomWalk(const vec3& rayOrigin, const vec3& ra
 				}
 
 				//update mc and pdf:
-				double transmittance = exp(-MediumParameters::mu_t * ray.tfar);
+				double transmittance = exp(-medium.mu_t * ray.tfar);
 				colorThroughput *= evalDiffuseBRDF(surfaceData.albedo);
 				measurementContrib *= transmittance * (double)cos_theta;
 				pdf *= transmittance * diffuseBRDFSamplingPDF(intersectionNormal, newDir);
@@ -763,11 +795,11 @@ vec3 VolumeRenderer::pathTracingRandomWalk(const vec3& rayOrigin, const vec3& ra
 			vec3 nextPosition = currPosition + (float)freePathLength * currDir;
 
 			//sample new direction
-			vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), MediumParameters::hg_g_F);
+			vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), medium.hg_g_F);
 
 			float cos_theta = dot(currDir, newDir);
-			float phase = henyeyGreenstein(cos_theta, MediumParameters::hg_g_F);
-			double transmittance = exp(-MediumParameters::mu_t * freePathLength);
+			float phase = henyeyGreenstein(cos_theta, medium.hg_g_F);
+			double transmittance = exp(-medium.mu_t * freePathLength);
 			double G = 1.0 / (freePathLength * freePathLength);
 			if (!isfinite(G)) {
 				break;
@@ -775,8 +807,8 @@ vec3 VolumeRenderer::pathTracingRandomWalk(const vec3& rayOrigin, const vec3& ra
 			assert(isfinite(G));
 
 			//update mc and pdf:
-			measurementContrib *= MediumParameters::mu_s * (double)phase * transmittance * G;
-			pdf *= MediumParameters::mu_t * (double)phase * transmittance * G;
+			measurementContrib *= medium.mu_s * (double)phase * transmittance * G;
+			pdf *= medium.mu_t * (double)phase * transmittance * G;
 
 			currPosition = nextPosition;
 			currDir = newDir;
@@ -801,10 +833,10 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 
 	int currSegmentLength = 0;
 
-	while (currSegmentLength < RenderingSettings::MAX_SEGMENT_COUNT) {
+	while (currSegmentLength < rendering.MAX_SEGMENT_COUNT) {
 
 		//sample free path Lenth
-		double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), MediumParameters::mu_t);
+		double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), medium.mu_t);
 
 		//intersect scene
 		RTCRay ray;
@@ -821,7 +853,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 
 					//Normal culling at light source
 					if (scene->lightSource->validHitDirection(currDir)) {
-						double transmittance = exp(-MediumParameters::mu_t * ray.tfar);
+						double transmittance = exp(-medium.mu_t * ray.tfar);
 						double GLight = (double)cosThetaLight / ((double)ray.tfar * (double)ray.tfar);
 						assert(isfinite((float)GLight));
 
@@ -855,7 +887,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 				}
 
 				currSegmentLength++;
-				if (currSegmentLength >= RenderingSettings::MAX_SEGMENT_COUNT) {
+				if (currSegmentLength >= rendering.MAX_SEGMENT_COUNT) {
 					break;
 				}
 
@@ -864,7 +896,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 				scene->getObjectData(ray.geomID, &surfaceData);
 
 				//update transmittance up to current position
-				double transmittance = exp(-MediumParameters::mu_t * ray.tfar);
+				double transmittance = exp(-medium.mu_t * ray.tfar);
 				measurementContrib *= transmittance;
 				pdf *= transmittance;
 
@@ -887,7 +919,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 						//normal culling at light
 						if (scene->lightSource->validHitDirection(dirToLight)) {
 							double GLight = (double)cosThetaLight / ((double)distToLight * (double)distToLight);
-							double neeTransmittance = exp(-MediumParameters::mu_t * (double)distToLight);
+							double neeTransmittance = exp(-medium.mu_t * (double)distToLight);
 							//pathTracingPDF *= GLight;
 
 							//contribute distance sampling!
@@ -944,7 +976,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 			vec3 nextPosition = currPosition + (float)freePathLength * currDir;
 
 			currSegmentLength++;
-			if (currSegmentLength >= RenderingSettings::MAX_SEGMENT_COUNT) {
+			if (currSegmentLength >= rendering.MAX_SEGMENT_COUNT) {
 				break;
 			}
 
@@ -954,9 +986,9 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 				break;
 			}
 			assert(isfinite(G));
-			double transmittance = exp(-MediumParameters::mu_t * freePathLength);
+			double transmittance = exp(-medium.mu_t * freePathLength);
 			measurementContrib *= transmittance * G;
-			pdf *= MediumParameters::mu_t * transmittance * G;
+			pdf *= medium.mu_t * transmittance * G;
 
 			/////////////////////////
 			// NEE in Medium
@@ -972,13 +1004,13 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 				if (!scene->surfaceOccluded(nextPosition, dirToLight, distToLight, shadowRay)) {
 
 					float cosTheta = dot(currDir, dirToLight);
-					double neePhase = (double)henyeyGreenstein(cosTheta, MediumParameters::hg_g_F);
+					double neePhase = (double)henyeyGreenstein(cosTheta, medium.hg_g_F);
 					double pathTracingPDF = neePhase;
 					float cosThetaLight = dot(-dirToLight, scene->lightSource->normal);
 					//normal culling at light
 					if (scene->lightSource->validHitDirection(dirToLight)) {
 						double GLight = cosThetaLight / ((double)distToLight * (double)distToLight);
-						double neeTransmittance = exp(-MediumParameters::mu_t * (double)distToLight);
+						double neeTransmittance = exp(-medium.mu_t * (double)distToLight);
 						//pathTracingPDF *= GLight;
 
 						//contribute transmittance:
@@ -986,7 +1018,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 
 						double misWeight = misPowerWeight(scene->lightSource->getPositionSamplingPDF(), pathTracingPDF);
 
-						double neeMeasurementContrib = measurementContrib * MediumParameters::mu_s * neePhase * neeTransmittance * GLight;
+						double neeMeasurementContrib = measurementContrib * medium.mu_s * neePhase * neeTransmittance * GLight;
 						double neePDF = pdf * scene->lightSource->getPositionSamplingPDF();
 						assert(isfinite(neePDF));
 						assert(neePDF > 0.0f);
@@ -1011,14 +1043,14 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 			/////////////////////////
 			// sample new direction
 			/////////////////////////
-			vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), MediumParameters::hg_g_F);
+			vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), medium.hg_g_F);
 
 			float cos_theta = dot(currDir, newDir);
-			float phase = henyeyGreenstein(cos_theta, MediumParameters::hg_g_F);
+			float phase = henyeyGreenstein(cos_theta, medium.hg_g_F);
 			lastDirSamplingPDF = (double)phase;
 			
 			//update mc and pdf:
-			measurementContrib *= MediumParameters::mu_s * (double)phase;
+			measurementContrib *= medium.mu_s * (double)phase;
 			pdf *= (double)phase;
 
 			currPosition = nextPosition;
@@ -1048,7 +1080,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 {
 	const int segmentCount = path->getSegmentLength();
 	assert(path->getVertexCount() >= 2);
-	assert(segmentCount <= RenderingSettings::MAX_SEGMENT_COUNT);
+	assert(segmentCount <= rendering.MAX_SEGMENT_COUNT);
 	assert(estimatorIndex >= 0);
 	assert(estimatorIndex < segmentCount);
 	vec3 errorValue(0.0f); //returned in case of errors
@@ -1171,7 +1203,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 		else {
 			//phase direction
 			float cosThetaPhase = dot(previousDir, currentDir);
-			double phase = (double)henyeyGreenstein(cosThetaPhase, MediumParameters::hg_g_F);
+			double phase = (double)henyeyGreenstein(cosThetaPhase, medium.hg_g_F);
 
 			measurementContrib *= mu_s * phase;
 			pathTracingPDF *= phase;
@@ -1237,12 +1269,12 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 		vec3 forkToLight = lightVertex - forkVertex;
 		float distanceToLight = length(forkToLight);
 
-		float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
+		float expectedSegments = distanceToLight / medium.meanFreePathF;
 
 		if (distanceToLight <= 0.0f) {
 			tl_estimatorPDFs[e] = 0.0;
 		}
-		else if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= RenderingSettings::MAX_MVNEE_SEGMENTS_F) {
+		else if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
 			//MVNEE is only valid if expected segment count is smaller than MAX_MVNEE_SEGMENTS!			
 			vec3 omega = forkToLight / distanceToLight; //normalize direction
 
@@ -1410,7 +1442,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 	vec3 currPosition = rayOrigin;
 	vec3 currDir = rayDir;
 
-	while (pathTracingPath->getSegmentLength() < RenderingSettings::MAX_SEGMENT_COUNT) {
+	while (pathTracingPath->getSegmentLength() < rendering.MAX_SEGMENT_COUNT) {
 		//sanity check assertions:
 		assert(pathTracingPath->getVertexCount() > 0);
 		PathVertex lastPathVertex;
@@ -1420,7 +1452,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 		assert(lastPathVertex.vertexType != TYPE_MVNEE);
 
 		//sample free path Lenth
-		double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), MediumParameters::mu_t);
+		double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), medium.mu_t);
 
 		//this is the starting vertex for MVNEE, depending on the intersection, it can either be a surface vertex or medium vertex
 		PathVertex forkVertex;
@@ -1486,7 +1518,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 			pathTracingPath->addMediumVertex(nextScatteringVertex, TYPE_MEDIUM);
 
 			//sample direction based on Henyey-Greenstein:
-			vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), MediumParameters::hg_g_F);
+			vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), medium.hg_g_F);
 
 			//update variables:
 			forkVertex.vertex = nextScatteringVertex;
@@ -1499,7 +1531,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 		}
 
 		int lastPathTracingVertexIndex = pathTracingPath->getSegmentLength();
-		if (lastPathTracingVertexIndex >= RenderingSettings::MAX_SEGMENT_COUNT) {
+		if (lastPathTracingVertexIndex >= rendering.MAX_SEGMENT_COUNT) {
 			break;
 		}
 
@@ -1514,8 +1546,8 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 		if (distanceToLight > Constants::epsilon) {
 
 			//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
-			float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
-			if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= RenderingSettings::MAX_MVNEE_SEGMENTS_F) {
+			float expectedSegments = distanceToLight / medium.meanFreePathF;
+			if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
 			
 				vec3 omega = forkToLight / distanceToLight; //direction of the line to the light source
 
@@ -1543,7 +1575,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 
 				if (validPath && mvneeSegmentCount > 0) {
 					//consider max segment length:
-					if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= RenderingSettings::MAX_SEGMENT_COUNT) {
+					if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= rendering.MAX_SEGMENT_COUNT) {
 
 						//determine seed vertices based on sampled segment lengths:
 						vec3 prevVertex = forkVertex.vertex;
@@ -1698,7 +1730,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 {
 	const int segmentCount = path->getSegmentLength();
 	assert(path->getVertexCount() >= 2);
-	assert(segmentCount <= RenderingSettings::MAX_SEGMENT_COUNT);
+	assert(segmentCount <= rendering.MAX_SEGMENT_COUNT);
 	assert(estimatorIndex >= 0);
 	assert(estimatorIndex < segmentCount);
 	vec3 errorValue(0.0f); //returned in case of errors
@@ -1783,7 +1815,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 			else {
 				//phase direction
 				float cosThetaPhase = dot(previousDir, currentDir);
-				double phase = (double)henyeyGreenstein(cosThetaPhase, MediumParameters::hg_g_F);
+				double phase = (double)henyeyGreenstein(cosThetaPhase, medium.hg_g_F);
 
 				measurementContrib *= mu_s * phase;
 				pathTracingPDF *= phase;
@@ -1848,12 +1880,12 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 		vec3 forkToLight = lightVertex - forkVertex;
 		float distanceToLight = length(forkToLight);
 
-		float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
+		float expectedSegments = distanceToLight / medium.meanFreePathF;
 
 		if (distanceToLight <= 0.0f) {
 			tl_estimatorPDFs[e] = 0.0;
 		}
-		else if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= RenderingSettings::MAX_MVNEE_SEGMENTS_F) {
+		else if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
 			//MVNEE is only valid if expected segment count is smaller than MAX_MVNEE_SEGMENTS!			
 			vec3 omega = forkToLight / distanceToLight; //normalize direction
 
@@ -2040,7 +2072,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 	int firstPossibleMVNEEEstimatorIndex = 1;
 
 
-	while (pathTracingPath->getSegmentLength() < RenderingSettings::MAX_SEGMENT_COUNT) {
+	while (pathTracingPath->getSegmentLength() < rendering.MAX_SEGMENT_COUNT) {
 		//sanity check assertions:
 		assert(pathTracingPath->getVertexCount() > 0);
 		PathVertex lastPathVertex;
@@ -2050,7 +2082,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 		assert(lastPathVertex.vertexType != TYPE_MVNEE);
 
 		//sample free path Lenth
-		double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), MediumParameters::mu_t);
+		double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), medium.mu_t);
 
 		//this is the starting vertex for MVNEE, depending on the intersection, it can either be a surface vertex or medium vertex
 		PathVertex forkVertex;
@@ -2160,11 +2192,11 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 
 
 			//sample direction based on Henyey-Greenstein:
-			vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), MediumParameters::hg_g_F);
+			vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), medium.hg_g_F);
 
 			//update pdf and mc for phase function
 			float cos_theta_Phase = dot(currDir, newDir);
-			double phase = (double)henyeyGreenstein(cos_theta_Phase, MediumParameters::hg_g_F);
+			double phase = (double)henyeyGreenstein(cos_theta_Phase, medium.hg_g_F);
 			newMeasurementContrib = measurementContrib * mu_s * phase;
 			pathTracingPDF *= phase;
 
@@ -2179,7 +2211,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 		}
 
 		int lastPathTracingVertexIndex = pathTracingPath->getSegmentLength();
-		if (lastPathTracingVertexIndex >= RenderingSettings::MAX_SEGMENT_COUNT) {
+		if (lastPathTracingVertexIndex >= rendering.MAX_SEGMENT_COUNT) {
 			break;
 		}
 
@@ -2194,8 +2226,8 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 		if (distanceToLight > Constants::epsilon) {
 
 			//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
-			float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
-			if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= RenderingSettings::MAX_MVNEE_SEGMENTS_F) {
+			float expectedSegments = distanceToLight / medium.meanFreePathF;
+			if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
 
 				vec3 omega = forkToLight / distanceToLight; //direction of the line to the light source
 
@@ -2223,7 +2255,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 
 				if (validPath && mvneeSegmentCount > 0) {
 					//consider max segment length:
-					if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= RenderingSettings::MAX_SEGMENT_COUNT) {
+					if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= rendering.MAX_SEGMENT_COUNT) {
 
 						//determine seed vertices based on sampled segment lengths:
 						vec3 prevVertex = forkVertex.vertex;
@@ -2386,7 +2418,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 {
 	const int segmentCount = path->getSegmentLength();
 	assert(path->getVertexCount() >= 2);
-	assert(segmentCount <= RenderingSettings::MAX_SEGMENT_COUNT);
+	assert(segmentCount <= rendering.MAX_SEGMENT_COUNT);
 	assert(estimatorIndex >= 0);
 	assert(estimatorIndex < segmentCount);
 	vec3 errorValue(0.0f); //returned in case of errors
@@ -2471,7 +2503,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 			else {
 				//phase direction
 				float cosThetaPhase = dot(previousDir, currentDir);
-				double phase = (double)henyeyGreenstein(cosThetaPhase, MediumParameters::hg_g_F);
+				double phase = (double)henyeyGreenstein(cosThetaPhase, medium.hg_g_F);
 
 				measurementContrib *= mu_s * phase;
 				pathTracingPDF *= phase;
@@ -2536,12 +2568,12 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 		vec3 forkToLight = lightVertex - forkVertex;
 		float distanceToLight = length(forkToLight);
 
-		float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
+		float expectedSegments = distanceToLight / medium.meanFreePathF;
 
 		if (distanceToLight <= 0.0f) {
 			tl_estimatorPDFs[e] = 0.0;
 		}
-		else if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= RenderingSettings::MAX_MVNEE_SEGMENTS_F) {
+		else if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
 			//MVNEE is only valid if expected segment count is smaller than MAX_MVNEE_SEGMENTS!			
 			vec3 omega = forkToLight / distanceToLight; //normalize direction
 
@@ -2684,7 +2716,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 
 	/*const int segmentCount = path->getSegmentLength();
 	assert(path->getVertexCount() >= 2);
-	assert(segmentCount <= RenderingSettings::MAX_SEGMENT_COUNT);
+	assert(segmentCount <= rendering.MAX_SEGMENT_COUNT);
 	assert(estimatorIndex >= 0);
 	assert(estimatorIndex < segmentCount);
 	vec3 errorValue(0.0f); //returned in case of errors
@@ -2767,7 +2799,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 			else {
 				//phase direction
 				float cosThetaPhase = dot(previousDir, currentDir);
-				double phase = (double)henyeyGreenstein(cosThetaPhase, MediumParameters::hg_g_F);
+				double phase = (double)henyeyGreenstein(cosThetaPhase, medium.hg_g_F);
 
 				measurementContrib *= mu_s * phase;
 				pathTracingPDF *= phase;
@@ -2830,12 +2862,12 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 		vec3 forkToLight = lightVertex - forkVertex;
 		float distanceToLight = length(forkToLight);
 
-		float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
+		float expectedSegments = distanceToLight / medium.meanFreePathF;
 
 		if (distanceToLight <= 0.0f) {
 			tl_estimatorPDFs[e] = 0.0;
 		}
-		else if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= RenderingSettings::MAX_MVNEE_SEGMENTS_F) {
+		else if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
 			//MVNEE is only valid if expected segment count is smaller than MAX_MVNEE_SEGMENTS!	
 			vec3 omega = forkToLight / distanceToLight; //normalize direction
 
@@ -3024,7 +3056,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 	int firstPossibleMVNEEEstimatorIndex = 1;
 
 
-	while (pathTracingPath->getSegmentLength() < RenderingSettings::MAX_SEGMENT_COUNT) {
+	while (pathTracingPath->getSegmentLength() < rendering.MAX_SEGMENT_COUNT) {
 		//sanity check assertions:
 		assert(pathTracingPath->getVertexCount() > 0);
 		PathVertex lastPathVertex;
@@ -3034,7 +3066,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 		assert(lastPathVertex.vertexType != TYPE_MVNEE);
 
 		//sample free path Lenth
-		double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), MediumParameters::mu_t);
+		double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), medium.mu_t);
 
 		//this is the starting vertex for MVNEE, depending on the intersection, it can either be a surface vertex or medium vertex
 		PathVertex forkVertex;
@@ -3144,11 +3176,11 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 
 
 			//sample direction based on Henyey-Greenstein:
-			vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), MediumParameters::hg_g_F);
+			vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), medium.hg_g_F);
 
 			//update pdf and mc for phase function
 			float cos_theta_Phase = dot(currDir, newDir);
-			double phase = (double)henyeyGreenstein(cos_theta_Phase, MediumParameters::hg_g_F);
+			double phase = (double)henyeyGreenstein(cos_theta_Phase, medium.hg_g_F);
 			newMeasurementContrib = measurementContrib * mu_s * phase;
 			pathTracingPDF *= phase;
 
@@ -3163,7 +3195,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 		}
 
 		int lastPathTracingVertexIndex = pathTracingPath->getSegmentLength();
-		if (lastPathTracingVertexIndex >= RenderingSettings::MAX_SEGMENT_COUNT) {
+		if (lastPathTracingVertexIndex >= rendering.MAX_SEGMENT_COUNT) {
 			break;
 		}
 
@@ -3178,8 +3210,8 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 		if (distanceToLight > Constants::epsilon) {
 
 			//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
-			float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
-			if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= RenderingSettings::MAX_MVNEE_SEGMENTS_F) {
+			float expectedSegments = distanceToLight / medium.meanFreePathF;
+			if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
 
 				vec3 omega = forkToLight / distanceToLight; //direction of the line to the light source
 
@@ -3207,7 +3239,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 
 				if (validPath && mvneeSegmentCount > 0) {
 					//consider max segment length:
-					if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= RenderingSettings::MAX_SEGMENT_COUNT) {
+					if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= rendering.MAX_SEGMENT_COUNT) {
 
 						//determine seed vertices based on sampled segment lengths:
 						vec3 prevVertex = forkVertex.vertex;
@@ -3373,7 +3405,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 	//index of first vertex which could serve as a MVNEE estimator starting point
 	int firstPossibleMVNEEEstimatorIndex = 1;
 
-	while (pathTracingPath->getSegmentLength() < RenderingSettings::MAX_SEGMENT_COUNT) {
+	while (pathTracingPath->getSegmentLength() < rendering.MAX_SEGMENT_COUNT) {
 		//sanity check assertions:
 		assert(pathTracingPath->getVertexCount() > 0);
 		PathVertex lastPathVertex;
@@ -3383,7 +3415,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 		assert(lastPathVertex.vertexType != TYPE_MVNEE);
 
 		//sample free path Lenth
-		double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), MediumParameters::mu_t);
+		double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), medium.mu_t);
 
 		//this is the starting vertex for MVNEE, depending on the intersection, it can either be a surface vertex or medium vertex
 		PathVertex forkVertex;
@@ -3492,11 +3524,11 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 
 
 			//sample direction based on Henyey-Greenstein:
-			vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), MediumParameters::hg_g_F);
+			vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), medium.hg_g_F);
 
 			//update pdf and mc for phase function
 			float cos_theta_Phase = dot(currDir, newDir);
-			double phase = (double)henyeyGreenstein(cos_theta_Phase, MediumParameters::hg_g_F);
+			double phase = (double)henyeyGreenstein(cos_theta_Phase, medium.hg_g_F);
 			newMeasurementContrib = measurementContrib * mu_s * phase;
 			pathTracingPDF *= phase;
 
@@ -3511,7 +3543,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 		}
 
 		int lastPathTracingVertexIndex = pathTracingPath->getSegmentLength();
-		if (lastPathTracingVertexIndex >= RenderingSettings::MAX_SEGMENT_COUNT) {
+		if (lastPathTracingVertexIndex >= rendering.MAX_SEGMENT_COUNT) {
 			break;
 		}
 
@@ -3526,8 +3558,8 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 		if (distanceToLight > Constants::epsilon) {
 
 			//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
-			float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
-			if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= RenderingSettings::MAX_MVNEE_SEGMENTS_F) {
+			float expectedSegments = distanceToLight / medium.meanFreePathF;
+			if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
 			
 				vec3 omega = forkToLight / distanceToLight; //direction of the line to the light source
 
@@ -3536,7 +3568,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 
 				//sample the segment lengths for the seed path:
 				int mvneeSegmentCount;
-				int maxSegmentCount = RenderingSettings::MAX_SEGMENT_COUNT - pathTracingPath->getSegmentLength();
+				int maxSegmentCount = rendering.MAX_SEGMENT_COUNT - pathTracingPath->getSegmentLength();
 
 				bool validPath = sampleSeedSegmentLengths(distanceToLight, tl_seedSegmentLengths, tl_seedSegmentLengthSquares, &mvneeSegmentCount, threadID);
 				//sampleSeedSegmentLengths(distanceToLight, tl_seedSegmentLengths, tl_seedSegmentLengthSquares, &mvneeSegmentCount, threadID, maxSegmentCount);
@@ -3561,7 +3593,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 
 				if (validPath && mvneeSegmentCount > 0) {
 					//consider max segment length:
-					if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= RenderingSettings::MAX_SEGMENT_COUNT) {
+					if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= rendering.MAX_SEGMENT_COUNT) {
 
 						//determine seed vertices based on sampled segment lengths:
 						vec3 prevVertex = forkVertex.vertex;
@@ -3731,7 +3763,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 {
 	const int segmentCount = path->getSegmentLength();
 	assert(path->getVertexCount() >= 2);
-	assert(segmentCount <= RenderingSettings::MAX_SEGMENT_COUNT);
+	assert(segmentCount <= rendering.MAX_SEGMENT_COUNT);
 	assert(estimatorIndex >= 0);
 	assert(estimatorIndex < segmentCount);
 	vec3 errorValue(0.0f); //returned in case of errors
@@ -3816,7 +3848,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 			else {
 				//phase direction
 				float cosThetaPhase = dot(previousDir, currentDir);
-				double phase = (double)henyeyGreenstein(cosThetaPhase, MediumParameters::hg_g_F);
+				double phase = (double)henyeyGreenstein(cosThetaPhase, medium.hg_g_F);
 
 				measurementContrib *= mu_s * phase;
 				pathTracingPDF *= phase;
@@ -3880,12 +3912,12 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 		vec3 forkToLight = lightVertex - forkVertex;
 		float distanceToLight = length(forkToLight);
 
-		float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
+		float expectedSegments = distanceToLight / medium.meanFreePathF;
 
 		if (distanceToLight <= 0.0f) {
 			tl_estimatorPDFs[e] = 0.0;
 		}
-		else if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= RenderingSettings::MAX_MVNEE_SEGMENTS_F) {
+		else if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
 			//MVNEE is only valid if expected segment count is smaller than MAX_MVNEE_SEGMENTS!			
 			vec3 omega = forkToLight / distanceToLight; //normalize direction
 
@@ -4015,7 +4047,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 	/*
 	const int segmentCount = path->getSegmentLength();
 	assert(path->getVertexCount() >= 2);
-	assert(segmentCount <= RenderingSettings::MAX_SEGMENT_COUNT);
+	assert(segmentCount <= rendering.MAX_SEGMENT_COUNT);
 	assert(estimatorIndex >= 0);
 	assert(estimatorIndex < segmentCount);
 	vec3 errorValue(0.0f); //returned in case of errors
@@ -4097,7 +4129,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 			else {
 				//phase direction
 				float cosThetaPhase = dot(previousDir, currentDir);
-				double phase = (double)henyeyGreenstein(cosThetaPhase, MediumParameters::hg_g_F);
+				double phase = (double)henyeyGreenstein(cosThetaPhase, medium.hg_g_F);
 
 				measurementContrib *= mu_s * phase;
 				pathTracingPDF *= phase;
@@ -4160,12 +4192,12 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 		vec3 forkToLight = lightVertex - forkVertex;
 		float distanceToLight = length(forkToLight);
 
-		float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
+		float expectedSegments = distanceToLight / medium.meanFreePathF;
 
 		if (distanceToLight <= 0.0f) {
 			tl_estimatorPDFs[e] = 0.0;
 		}
-		else if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= RenderingSettings::MAX_MVNEE_SEGMENTS_F) {
+		else if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
 			//MVNEE is only valid if expected segment count is smaller than MAX_MVNEE_SEGMENTS!	
 			vec3 omega = forkToLight / distanceToLight; //normalize direction
 
@@ -4339,7 +4371,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 	 int firstPossibleMVNEEEstimatorIndex = 1;
 
 
-	 while (pathTracingPath->getSegmentLength() < RenderingSettings::MAX_SEGMENT_COUNT) {
+	 while (pathTracingPath->getSegmentLength() < rendering.MAX_SEGMENT_COUNT) {
 		 //sanity check assertions:
 		 assert(pathTracingPath->getVertexCount() > 0);
 		 PathVertex lastPathVertex;
@@ -4349,7 +4381,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 		 assert(lastPathVertex.vertexType != TYPE_MVNEE);
 
 		 //sample free path Lenth
-		 double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), MediumParameters::mu_t);
+		 double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), medium.mu_t);
 
 		 //this is the starting vertex for MVNEE, depending on the intersection, it can either be a surface vertex or medium vertex
 		 PathVertex forkVertex;
@@ -4459,11 +4491,11 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 
 
 			 //sample direction based on Henyey-Greenstein:
-			 vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), MediumParameters::hg_g_F);
+			 vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), medium.hg_g_F);
 
 			 //update pdf and mc for phase function
 			 float cos_theta_Phase = dot(currDir, newDir);
-			 double phase = (double)henyeyGreenstein(cos_theta_Phase, MediumParameters::hg_g_F);
+			 double phase = (double)henyeyGreenstein(cos_theta_Phase, medium.hg_g_F);
 			 newMeasurementContrib = measurementContrib * mu_s * phase;
 			 pathTracingPDF *= phase;
 
@@ -4478,7 +4510,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 		 }
 
 		 int lastPathTracingVertexIndex = pathTracingPath->getSegmentLength();
-		 if (lastPathTracingVertexIndex >= RenderingSettings::MAX_SEGMENT_COUNT) {
+		 if (lastPathTracingVertexIndex >= rendering.MAX_SEGMENT_COUNT) {
 			 break;
 		 }
 
@@ -4493,8 +4525,8 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 		 if (distanceToLight > Constants::epsilon) {
 
 			 //only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
-			 float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
-			 if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= RenderingSettings::MAX_MVNEE_SEGMENTS_F) {
+			 float expectedSegments = distanceToLight / medium.meanFreePathF;
+			 if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
 
 				 vec3 omega = forkToLight / distanceToLight; //direction of the line to the light source
 
@@ -4522,7 +4554,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 
 				 if (validPath && mvneeSegmentCount > 0) {
 					 //consider max segment length:
-					 if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= RenderingSettings::MAX_SEGMENT_COUNT) {
+					 if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= rendering.MAX_SEGMENT_COUNT) {
 
 						 //determine seed vertices based on sampled segment lengths:
 						 vec3 prevVertex = forkVertex.vertex;
@@ -4671,7 +4703,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 	 //index of first vertex which could serve as a MVNEE estimator starting point
 	 int firstPossibleMVNEEEstimatorIndex = 1;
 
-	 while (pathTracingPath->getSegmentLength() < RenderingSettings::MAX_SEGMENT_COUNT) {
+	 while (pathTracingPath->getSegmentLength() < rendering.MAX_SEGMENT_COUNT) {
 		 //sanity check assertions:
 		 assert(pathTracingPath->getVertexCount() > 0);
 		 PathVertex lastPathVertex;
@@ -4681,7 +4713,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 		 assert(lastPathVertex.vertexType != TYPE_MVNEE);
 
 		 //sample free path Lenth
-		 double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), MediumParameters::mu_t);
+		 double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), medium.mu_t);
 
 		 //this is the starting vertex for MVNEE, depending on the intersection, it can either be a surface vertex or medium vertex
 		 PathVertex forkVertex;
@@ -4790,11 +4822,11 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 
 
 			 //sample direction based on Henyey-Greenstein:
-			 vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), MediumParameters::hg_g_F);
+			 vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), medium.hg_g_F);
 
 			 //update pdf and mc for phase function
 			 float cos_theta_Phase = dot(currDir, newDir);
-			 double phase = (double)henyeyGreenstein(cos_theta_Phase, MediumParameters::hg_g_F);
+			 double phase = (double)henyeyGreenstein(cos_theta_Phase, medium.hg_g_F);
 			 newMeasurementContrib = measurementContrib * mu_s * phase;
 			 pathTracingPDF *= phase;
 
@@ -4809,7 +4841,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 		 }
 
 		 int lastPathTracingVertexIndex = pathTracingPath->getSegmentLength();
-		 if (lastPathTracingVertexIndex >= RenderingSettings::MAX_SEGMENT_COUNT) {
+		 if (lastPathTracingVertexIndex >= rendering.MAX_SEGMENT_COUNT) {
 			 break;
 		 }
 
@@ -4823,8 +4855,8 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 		 float distanceToLight = length(forkToLight);
 		 if (distanceToLight > Constants::epsilon) {
 			 //only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
-			 float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
-			 if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= RenderingSettings::MAX_MVNEE_SEGMENTS_F) {
+			 float expectedSegments = distanceToLight / medium.meanFreePathF;
+			 if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
 
 				 vec3 omega = forkToLight / distanceToLight; //direction of the line to the light source
 
@@ -4833,7 +4865,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 
 				 //sample the segment lengths for the seed path:
 				 int mvneeSegmentCount;
-				 int maxSegmentCount = RenderingSettings::MAX_SEGMENT_COUNT - pathTracingPath->getSegmentLength();
+				 int maxSegmentCount = rendering.MAX_SEGMENT_COUNT - pathTracingPath->getSegmentLength();
 
 				 bool validPath = sampleSeedSegmentLengths(distanceToLight, tl_seedSegmentLengths, &mvneeSegmentCount, threadID);
 
@@ -4855,7 +4887,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 
 				 if (validPath && mvneeSegmentCount > 0) {
 					 //consider max segment length:
-					 if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= RenderingSettings::MAX_SEGMENT_COUNT) {
+					 if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= rendering.MAX_SEGMENT_COUNT) {
 
 						 //determine seed vertices based on sampled segment lengths:
 						 vec3 prevVertex = forkVertex.vertex;
@@ -5016,12 +5048,12 @@ bool VolumeRenderer::sampleSeedSegmentLengths(const double& curve_length, float*
 	int vertexCount = 0;
 	bool valid = true;
 	while (lengthSum < curve_length) {
-		if (vertexCount >= RenderingSettings::MAX_SEGMENT_COUNT) {
+		if (vertexCount >= rendering.MAX_SEGMENT_COUNT) {
 			valid = false;
 			break;
 		}
 
-		double currSegmentLength = sampleFreePathLength(sample1DOpenInterval(threadID), MediumParameters::mu_t);
+		double currSegmentLength = sampleFreePathLength(sample1DOpenInterval(threadID), medium.mu_t);
 		if (lengthSum + currSegmentLength <= curve_length)
 		{
 			segments[vertexCount] = (float)currSegmentLength;
@@ -5049,12 +5081,12 @@ inline bool VolumeRenderer::sampleSeedSegmentLengths(const double& curve_length,
 	int vertexCount = 0;
 	bool valid = true;
 	while (lengthSum < curve_length) {
-		if (vertexCount >= RenderingSettings::MAX_SEGMENT_COUNT) {
+		if (vertexCount >= rendering.MAX_SEGMENT_COUNT) {
 			valid = false;
 			break;
 		}
 
-		double currSegmentLength = sampleFreePathLength(sample1DOpenInterval(threadID), MediumParameters::mu_t);
+		double currSegmentLength = sampleFreePathLength(sample1DOpenInterval(threadID), medium.mu_t);
 		if (lengthSum + currSegmentLength <= curve_length)
 		{
 			segments[vertexCount] = (float)currSegmentLength;
@@ -5082,7 +5114,7 @@ inline void VolumeRenderer::sampleSeedSegmentLengths(const double& curve_length,
 {
 	assert(curve_length > 0.0);
 	assert(maxSegments > 0);
-	assert(maxSegments < RenderingSettings::MAX_SEGMENT_COUNT);
+	assert(maxSegments < rendering.MAX_SEGMENT_COUNT);
 	double lengthSum = 0.0;
 	int vertexCount = 0;
 	while (lengthSum < curve_length) {
@@ -5095,7 +5127,7 @@ inline void VolumeRenderer::sampleSeedSegmentLengths(const double& curve_length,
 			break;
 		}
 
-		double currSegmentLength = sampleFreePathLength(sample1DOpenInterval(threadID), MediumParameters::mu_t);
+		double currSegmentLength = sampleFreePathLength(sample1DOpenInterval(threadID), medium.mu_t);
 		if (lengthSum + currSegmentLength <= curve_length)
 		{
 			segments[vertexCount] = (float)currSegmentLength;
@@ -5208,17 +5240,17 @@ void VolumeRenderer::saveBufferToOpenEXR(const char* filename, vec3* imageBuffer
 void VolumeRenderer::printRenderingParameters(int sampleCount, double duration)
 {
 	//save textual output of all the parameters (volume, samples, lamp,...)
-	string paramsFile = RenderingSettings::sessionName;
+	string paramsFile = rendering.sessionName;
 	paramsFile.append("_params.txt");
 	ofstream o(paramsFile.c_str(), ios::out);
 
 	glm::int64 successfulPathCount = 0;
-	for (int i = 0; i < RenderingSettings::THREAD_COUNT; i++) {
+	for (int i = 0; i < rendering.THREAD_COUNT; i++) {
 		successfulPathCount += successfulPathCounter[i];
 	}
 
 	o << "Integrator: " << endl;
-	switch (RenderingSettings::integrator) {
+	switch (rendering.integrator) {
 		case TEST_RENDERING: o << "Test Rendering" << endl; break;
 		case PATH_TRACING_NO_SCATTERING: o << "Path Tracing, no medium interaction" << endl; break;
 		case PATH_TRACING_NEE_MIS_NO_SCATTERING: o << "Path Tracing with NEE and MIS, no medium interaction" << endl; break;
@@ -5234,26 +5266,26 @@ void VolumeRenderer::printRenderingParameters(int sampleCount, double duration)
 		default: o << "DEFAULT: Integrator unknown!" << endl; break;
 	}
 	o << endl;
-	o << "Image Dimension: width = " << RenderingSettings::WIDTH << ", height = " << RenderingSettings::HEIGHT << endl;
+	o << "Image Dimension: width = " << rendering.WIDTH << ", height = " << rendering.HEIGHT << endl;
 	o << "Num Samples: " << sampleCount << endl;
-	o << "maximum path length: " << RenderingSettings::MAX_SEGMENT_COUNT << endl;
-	o << "maximum expected MVNEE segments: " << RenderingSettings::MAX_MVNEE_SEGMENTS << endl;
+	o << "maximum path length: " << rendering.MAX_SEGMENT_COUNT << endl;
+	o << "maximum expected MVNEE segments: " << rendering.MAX_MVNEE_SEGMENTS << endl;
 	o << "count of successful paths: " << successfulPathCount << endl;
 	o << endl;
 	scene->lightSource->printParameters(o);	
 	o << endl;
-	o << "mu_s: " << MediumParameters::mu_s << endl;
-	o << "mu_a: " << MediumParameters::mu_a << endl;
-	o << "mu_t: " << MediumParameters::mu_t << endl;
-	o << "henyey-greenstein g: " << MediumParameters::hg_g << endl;
+	o << "mu_s: " << medium.mu_s << endl;
+	o << "mu_a: " << medium.mu_a << endl;
+	o << "mu_t: " << medium.mu_t << endl;
+	o << "henyey-greenstein g: " << medium.hg_g << endl;
 	o << "sigma_for_hg: " << sigmaForHG << endl;
 	o << endl;
 	o << "Thread count for execution = ";
-	if (!RenderingSettings::RENDER_PARALLEL || RenderingSettings::THREAD_COUNT == 1) {
+	if (!rendering.RENDER_PARALLEL || rendering.THREAD_COUNT == 1) {
 		o << 1 << endl;
 	}
 	else {
-		o << RenderingSettings::THREAD_COUNT << endl;
+		o << rendering.THREAD_COUNT << endl;
 	}	
 	o << "Time elapsed: " << duration << endl; 
 
@@ -5268,7 +5300,7 @@ void VolumeRenderer::printCounters()
 	glm::int64 successfullySampledCount = 0;
 	glm::int64 rejectedSuccessfulCount = 0;
 	glm::int64 occludedPathCount = 0;
-	for (int i = 0; i < RenderingSettings::THREAD_COUNT; i++) {
+	for (int i = 0; i < rendering.THREAD_COUNT; i++) {
 		successfulPathCount += successfulPathCounter[i];
 		pathTooShortCount += segmentsTooShortCounter[i];
 		successfullySampledCount += successfullyCreatedPaths[i];
@@ -5277,7 +5309,7 @@ void VolumeRenderer::printCounters()
 	}
 
 	//save textual output of all the parameters (volume, samples, lamp,...)
-	string paramsFile = RenderingSettings::sessionName;
+	string paramsFile = rendering.sessionName;
 	paramsFile.append("_counters.txt");
 	ofstream o(paramsFile.c_str(), ios::out);
 	

@@ -67,7 +67,7 @@ public:
 		//lightSource = lightDisk;
 
 		//add light geometry to embree scene:
-		int objectID = addCircularPlane(LightSettings::lightCenter, LightSettings::lightNormal, LightSettings::lightU, LightSettings::lightV, LightSettings::lightRadius, 100, "light", LightSettings::lightColor);
+		//int objectID = addCircularPlane(LightSettings::lightCenter, LightSettings::lightNormal, LightSettings::lightU, LightSettings::lightV, LightSettings::lightRadius, 100, "light", LightSettings::lightColor);
 	}
 
 	~Scene() {
@@ -431,7 +431,7 @@ public:
 	/**
 	* Reads a scene from an xml scene file.
 	*/
-	bool readSceneXML(const string& settingsFilePath)
+	bool readSceneXML(const string& settingsFilePath, Rendering* rendering, Medium* medium)
 	{
 		//check for correct file:
 		ifstream file;
@@ -464,6 +464,7 @@ public:
 			string integrator = integratorType->value();
 			string sessionName;
 			int width, height, samples, threadCount, MESC, maxSegments;
+			bool renderParallel = true;
 
 			for (xml_node<>* intSubNode = integratorNode->first_node(); intSubNode; intSubNode = intSubNode->next_sibling()) {
 				string currName = intSubNode->name();
@@ -473,27 +474,89 @@ public:
 					width = widthS.getIntParam("");
 					StringParser heightS = intSubNode->first_attribute("height")->value();
 					height = heightS.getIntParam("");
+					if (width < 1 || height < 1) {
+						cout << "invalid resolution! " << width << ", " << height << endl;
+						return false;
+					}
 				}
 				else if (currName == "samples") {
 					StringParser samplesS = intSubNode->first_attribute("spp")->value();
 					samples = samplesS.getIntParam("");
+					if (samples < 1) {
+						cout << "invalid samples!" << samples << ", value has to be > 0!" << endl;
+						return false;
+					}
 				}
 				else if (currName == "maxPathSegments") {
 					StringParser string = intSubNode->first_attribute("value")->value();
 					maxSegments = string.getIntParam("");
+					if (maxSegments < 1) {
+						cout << "invalid maxSegments!" << maxSegments << ", value has to be > 0!" << endl;
+						return false;
+					}
 				}
 				else if (currName == "MESC") {
 					StringParser string = intSubNode->first_attribute("value")->value();
 					MESC = string.getIntParam("");
+					if (MESC < 1) {
+						cout << "invalid MESC!" << MESC << ", value has to be > 0!" << endl;
+						return false;
+					}
 				}
 				else if (currName == "threads") {
 					StringParser string = intSubNode->first_attribute("count")->value();
 					threadCount = string.getIntParam("");
+					if (threadCount == 1) {
+						renderParallel = false;
+					}
+					else if (threadCount < 0) {
+						cout << "invalid thread count!"<< threadCount << ", value has to be positive!" << endl;
+						return false;
+					}
 				}
 				else {
 					cout << "invalid integrator param! " << currName << endl;
 				}
 			}
+			rendering->WIDTH = width;
+			rendering->HEIGHT = height;
+			rendering->SAMPLE_COUNT = samples;
+			rendering->MAX_MVNEE_SEGMENTS = MESC;
+			rendering->MAX_MVNEE_SEGMENTS_F = (float)MESC;
+			rendering->MAX_SEGMENT_COUNT = maxSegments;
+			rendering->RENDER_PARALLEL = renderParallel;
+			rendering->THREAD_COUNT = threadCount;
+			rendering->sessionName = sessionName;
+			IntegratorEnum integratorEnum;
+			if (integrator == "PATH_TRACING_MVNEE_FINAL") {
+				integratorEnum = PATH_TRACING_MVNEE_FINAL;
+			}
+			else if (integrator == "PATH_TRACING_MVNEE") {
+				integratorEnum = PATH_TRACING_MVNEE;
+			}
+			else if (integrator == "PATH_TRACING_MVNEE_GAUSS_PERTURB") {
+				integratorEnum = PATH_TRACING_MVNEE_GAUSS_PERTURB;
+			}
+			else if (integrator == "PATH_TRACING_MVNEE_Constants_ALPHA") {
+				integratorEnum = PATH_TRACING_MVNEE_Constants_ALPHA;
+			}
+			else if (integrator == "PATH_TRACING_NEE_MIS") {
+				integratorEnum = PATH_TRACING_NEE_MIS;
+			}
+			else if (integrator == "PATH_TRACING_NEE_MIS_NO_SCATTERING") {
+				integratorEnum = PATH_TRACING_NEE_MIS_NO_SCATTERING;
+			}
+			else if (integrator == "PATH_TRACING_NO_SCATTERING") {
+				integratorEnum = PATH_TRACING_NO_SCATTERING;
+			}
+			else if (integrator == "PATH_TRACING_RANDOM_WALK") {
+				integratorEnum = PATH_TRACING_RANDOM_WALK;
+			}
+			else  {
+				cout << "invalid integrator!! " << integrator << endl;
+				return false;
+			}
+			rendering->integrator = integratorEnum;
 
 			//Camera
 			xml_node<>* cameraNode = sceneNode->first_node("camera");
@@ -571,6 +634,8 @@ public:
 			}
 					
 			lightSource = new LightDisk(lightCenter, lightNormal, lightU, lightV, lightColor, lightBrightness, lightRadius);
+			//add light object geometry to embree scene
+			addCircularPlane(lightCenter, lightNormal, lightU, lightV, lightRadius, 100, "light", lightColor);
 
 			//MediumSettings
 			xml_node<>* mediumNode = sceneNode->first_node("medium");
@@ -589,6 +654,14 @@ public:
 			string g_str = phaseFunctionSubNode->first_attribute("g")->value();
 			double g = atof(g_str.data());
 			float gF = (float)g;
+
+			medium->hg_g = g;
+			medium->hg_g_F = gF;
+			medium->meanFreePath = meanFreePath;
+			medium->meanFreePathF = meanFreePathF;
+			medium->mu_s = mu_s;
+			medium->mu_a = mu_a;
+			medium->mu_t = mu_t;
 
 			//Models/Objects
 			cout << "adding models to the scene..." << endl;

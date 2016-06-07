@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <scene version="1.0.0">
-	<integrator type="mvnee">
+	<integrator type="PATH_TRACING_MVNEE_FINAL">
 		<output sessionName="testOutput" width="512" height="512"/>
 		<samples spp="10000"/>
 		<!-- Stopping criteria for all paths: max path length -->
