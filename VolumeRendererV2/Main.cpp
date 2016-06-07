@@ -61,11 +61,12 @@ int main(int argc, const char* argv[])
 	//commit after all scene geometry is finished
 	rtcCommit(scene);
 
-	//commit after all scene geometry is finished
-	rtcCommit(scene);
-
 	//create volumeRenderer and start rendering
 	VolumeRenderer* volumeRenderer = new VolumeRenderer(scene, sceneObject, mediumSetting, renderingSetting);
+
+	cout << "----------------------" << endl;
+	cout << "Start rendering..." << endl;
+
 	volumeRenderer->renderScene();	
 	//volumeRenderer->renderSceneWithMaximalDuration(5.0);
 	//volumeRenderer->renderSceneWithMaximalDuration(60.0f);

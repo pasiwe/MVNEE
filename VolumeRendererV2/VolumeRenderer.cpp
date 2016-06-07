@@ -48,7 +48,7 @@ VolumeRenderer::VolumeRenderer(RTCScene sceneGeometry, Scene* scene, Medium& med
 		estimatorPDFs[i] = new double[rendering.MAX_SEGMENT_COUNT];
 		cumulatedPathTracingPDFs[i] = new double[rendering.MAX_SEGMENT_COUNT + 1];
 
-		pathTracingPaths[i] = new Path();
+		pathTracingPaths[i] = new Path(rendering.MAX_SEGMENT_COUNT);
 	}
 	frameBuffer = new vec3[rendering.HEIGHT * rendering.WIDTH];
 
@@ -198,7 +198,6 @@ void VolumeRenderer::renderScene()
 	double duration = (double)durationV / (60.0 * 1000000.0);
 
 	printRenderingParameters(rendering.SAMPLE_COUNT, duration);
-	printCounters();
 
 	writeBufferToFloatFile(rendering.sessionName, rendering.WIDTH, rendering.HEIGHT, frameBuffer);
 
@@ -326,7 +325,6 @@ void VolumeRenderer::renderSceneWithMaximalDuration(double maxDurationMinutes)
 	}	
 
 	printRenderingParameters(samples, currentDuration);	
-	printCounters();
 
 	writeBufferToFloatFile(rendering.sessionName, rendering.WIDTH, rendering.HEIGHT, frameBuffer);
 
@@ -874,15 +872,12 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 						}
 
 						finalValue += (float)(misWeight * finalContribution) * colorThroughput * scene->lightSource->Le;
-						successfulPathCounter[threadID]++;
 					}
-					occludedPathCounter[threadID]++;
 					break;
 				}
 
 				//surface normal culling:
 				if (dot(intersectionNormal, -currDir) <= 0.0f) {
-					occludedPathCounter[threadID]++;
 					break;
 				}
 
@@ -935,16 +930,10 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 							assert(isfinite(finalContribution));
 
 							finalValue += (float)finalContribution * neeColorThroughput * scene->lightSource->Le;
-							successfulPathCounter[threadID]++;
-						}
-						else {
-							occludedPathCounter[threadID]++;
 						}
 					}
 				}
-				else {
-					occludedPathCounter[threadID]++;
-				}
+
 				/////////////////////////
 				// Sample BRDF
 				/////////////////////////				
@@ -953,7 +942,6 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 				vec3 newDir = sampleDiffuseBRDFDir(intersectionNormal, sample1D(threadID), sample1D(threadID));
 				float cos_theta = dot(intersectionNormal, newDir);
 				if (cos_theta <= 0.0f) {
-					occludedPathCounter[threadID]++;
 					break;
 				}
 
@@ -967,7 +955,6 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 				currDir = newDir;
 			}
 			else {
-				segmentsTooShortCounter[threadID]++;
 				break;
 			}
 		}
@@ -1027,19 +1014,10 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 						assert(isfinite(finalContribution));
 
 						finalValue += (float)finalContribution * colorThroughput * scene->lightSource->Le;
-						successfulPathCounter[threadID]++;
-					}
-					else {
-						occludedPathCounter[threadID]++;
 					}
 				}
-				else {
-					occludedPathCounter[threadID]++;
-				}
 			}
-			else {
-				segmentsTooShortCounter[threadID]++;
-			}
+
 			/////////////////////////
 			// sample new direction
 			/////////////////////////
@@ -1138,7 +1116,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 		return errorValue;		
 	}
 	
-	double firstTransmittance = exp(-mu_t * (double)firstDistance);
+	double firstTransmittance = exp(-medium.mu_t * (double)firstDistance);
 	double firstG = 1.0 / ((double)(firstDistance)* (double)(firstDistance));
 	assert(isfinite(firstG));
 	if (secondVertex.vertexType == TYPE_SURFACE) {
@@ -1155,7 +1133,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 	}
 	else {
 		measurementContrib *= firstTransmittance * firstG;
-		pathTracingPDF *= mu_t * firstTransmittance * firstG;
+		pathTracingPDF *= medium.mu_t * firstTransmittance * firstG;
 	}
 
 	//first path tracing pdf calculated:
@@ -1179,7 +1157,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 		}
 		currentDir = currentDir / currentDistance; //normalize direction
 
-		double currTransmittance = exp(-mu_t * (double)currentDistance);
+		double currTransmittance = exp(-medium.mu_t * (double)currentDistance);
 		double currG = 1.0 / ((double)(currentDistance) * (double)(currentDistance));		
 		assert(isfinite(currG));
 
@@ -1205,7 +1183,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 			float cosThetaPhase = dot(previousDir, currentDir);
 			double phase = (double)henyeyGreenstein(cosThetaPhase, medium.hg_g_F);
 
-			measurementContrib *= mu_s * phase;
+			measurementContrib *= medium.mu_s * phase;
 			pathTracingPDF *= phase;
 		}
 				
@@ -1241,7 +1219,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 			}
 			else {
 				measurementContrib *= currTransmittance * currG;
-				pathTracingPDF *= mu_t * currTransmittance * currG;
+				pathTracingPDF *= medium.mu_t * currTransmittance * currG;
 			}			
 		}
 		
@@ -1355,7 +1333,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 					double uvPerturbPDF = GGX_2D_PDF(r2, finalGGXAlpha); //pdf for u-v-plane perturbation
 
 					float distanceToPrevVertex = tl_seedSegmentLengths[s];
-					double segmentCountPDF = mu_t * exp(-mu_t * (double)distanceToPrevVertex); //pdf for seed distance sampling
+					double segmentCountPDF = medium.mu_t * exp(-medium.mu_t * (double)distanceToPrevVertex); //pdf for seed distance sampling
 					double combinedPDF = (segmentCountPDF * uvPerturbPDF);
 
 					perturbationPDF *= combinedPDF;
@@ -1366,7 +1344,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 					float lastSeedSegmentLength = tl_seedSegmentLengths[mvneeSegmentCount - 1];
 					if (lastSeedSegmentLength >= 0.0f) {
 						//contribute sampling for last segment: pdf for sampling distance >= distance to Light!
-						perturbationPDF *= exp(-mu_t * (double)lastSeedSegmentLength);
+						perturbationPDF *= exp(-medium.mu_t * (double)lastSeedSegmentLength);
 
 						double finalEstimatorPDF = pathTracingStartPDF * scene->lightSource->getPositionSamplingPDF() * perturbationPDF;
 						if (isfinite(finalEstimatorPDF)) {
@@ -1772,7 +1750,6 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 		vec3 previousDir = vertex2.vertex - vertex1.vertex;
 		float previousDistance = length(previousDir);
 		if (previousDistance <= 0.0f) {
-			rejectedSuccessfulPaths[threadID]++;
 			return errorValue;
 		}
 		previousDir /= previousDistance;
@@ -1785,12 +1762,11 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 			vec3 currentDir = currVert.vertex - prevVert.vertex;
 			float currentDistance = length(currentDir);
 			if (currentDistance <= 0.0f) {
-				rejectedSuccessfulPaths[threadID]++;
 				return errorValue;
 			}
 			currentDir = currentDir / currentDistance; //normalize direction
 
-			double currTransmittance = exp(-mu_t * (double)currentDistance);
+			double currTransmittance = exp(-medium.mu_t * (double)currentDistance);
 			double currG = 1.0 / ((double)(currentDistance)* (double)(currentDistance));
 			assert(isfinite(currG));
 
@@ -1803,7 +1779,6 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 				float cosThetaBRDF = dot(prevVert.surfaceNormal, currentDir);
 				if (cosThetaBRDF <= 0.0f) {
 					cout << "wrong outgoing direction at surface!: cosTheta = " << cosThetaBRDF << endl;
-					rejectedSuccessfulPaths[threadID]++;
 					return errorValue;
 				}
 				assert(cosThetaBRDF > 0.0f);
@@ -1817,7 +1792,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 				float cosThetaPhase = dot(previousDir, currentDir);
 				double phase = (double)henyeyGreenstein(cosThetaPhase, medium.hg_g_F);
 
-				measurementContrib *= mu_s * phase;
+				measurementContrib *= medium.mu_s * phase;
 				pathTracingPDF *= phase;
 			}
 
@@ -1834,7 +1809,6 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 				}
 				else {
 					cout << "path hits light from backside!" << endl;
-					rejectedSuccessfulPaths[threadID]++;
 					return errorValue;
 				}
 			}
@@ -1843,8 +1817,6 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 				if (currVert.vertexType == TYPE_SURFACE) {
 					float cosTheta = dot(currVert.surfaceNormal, -currentDir);
 					if (cosTheta <= 0.0f) {
-						//cout << "Surface cosTheta <= 0.0f: " << setprecision(12) << cosTheta<< endl;
-						rejectedSuccessfulPaths[threadID]++;
 						return errorValue;
 					}
 					assert(cosTheta > 0.0f);
@@ -1855,7 +1827,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 				}
 				else {
 					measurementContrib *= currTransmittance * currG;
-					pathTracingPDF *= mu_t * currTransmittance * currG;
+					pathTracingPDF *= medium.mu_t * currTransmittance * currG;
 				}
 			}
 
@@ -1970,7 +1942,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 
 					float distanceToPrevVertex = tl_seedSegmentLengths[s];
 
-					double combinedPDF = (mu_t * uvPerturbPDF);
+					double combinedPDF = (medium.mu_t * uvPerturbPDF);
 					perturbationPDF *= combinedPDF;
 				}
 
@@ -1978,7 +1950,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 				if (validMVNEEPath) {
 					float lastSeedSegmentLength = tl_seedSegmentLengths[mvneeSegmentCount - 1];
 					if (lastSeedSegmentLength >= 0.0f) {
-						perturbationPDF *= exp(-mu_t * (double)distanceToLight);
+						perturbationPDF *= exp(-medium.mu_t * (double)distanceToLight);
 
 						double finalEstimatorPDF = pathTracingStartPDF * scene->lightSource->getPositionSamplingPDF() * perturbationPDF;
 						if (isfinite(finalEstimatorPDF)) {
@@ -2112,7 +2084,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 					if (scene->lightSource->validHitDirection(currDir)) {
 
 						//update contribution
-						double transmittance = exp(-mu_t * ray.tfar);
+						double transmittance = exp(-medium.mu_t * ray.tfar);
 						float cosThetaLight = dot(-currDir, scene->lightSource->normal);
 						double G = cosThetaLight / ((double)ray.tfar * (double)ray.tfar);
 						measurementContrib *= transmittance * G;
@@ -2140,7 +2112,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 
 
 				//update pdf and mc:
-				double transmittance = exp(-mu_t * ray.tfar);
+				double transmittance = exp(-medium.mu_t * ray.tfar);
 				float cosThetaSurface = dot(-currDir, intersectionNormal);
 				double G = cosThetaSurface / ((double)ray.tfar * (double)ray.tfar);
 				measurementContrib *= transmittance * G;
@@ -2180,14 +2152,14 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 
 
 			//update pdf and mc:
-			double transmittance = exp(-mu_t * freePathLength);
+			double transmittance = exp(-medium.mu_t * freePathLength);
 			double G = 1.0 / ((double)freePathLength * (double)freePathLength);
 			if (!isfinite(G)) {
 				break;
 			}
 			assert(isfinite(G));
 			measurementContrib *= transmittance * G;
-			pathTracingPDF *= mu_t * transmittance * G;
+			pathTracingPDF *= medium.mu_t * transmittance * G;
 			tl_cumulativePathTracingPDFs[pathTracingPath->getSegmentLength()] = pathTracingPDF;
 
 
@@ -2197,7 +2169,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 			//update pdf and mc for phase function
 			float cos_theta_Phase = dot(currDir, newDir);
 			double phase = (double)henyeyGreenstein(cos_theta_Phase, medium.hg_g_F);
-			newMeasurementContrib = measurementContrib * mu_s * phase;
+			newMeasurementContrib = measurementContrib * medium.mu_s * phase;
 			pathTracingPDF *= phase;
 
 			//update variables:
@@ -2460,7 +2432,6 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 		vec3 previousDir = vertex2.vertex - vertex1.vertex;
 		float previousDistance = length(previousDir);
 		if (previousDistance <= 0.0f) {
-			rejectedSuccessfulPaths[threadID]++;
 			return errorValue;
 		}
 		previousDir /= previousDistance;
@@ -2473,12 +2444,11 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 			vec3 currentDir = currVert.vertex - prevVert.vertex;
 			float currentDistance = length(currentDir);
 			if (currentDistance <= 0.0f) {
-				rejectedSuccessfulPaths[threadID]++;
 				return errorValue;
 			}
 			currentDir = currentDir / currentDistance; //normalize direction
 
-			double currTransmittance = exp(-mu_t * (double)currentDistance);
+			double currTransmittance = exp(-medium.mu_t * (double)currentDistance);
 			double currG = 1.0 / ((double)(currentDistance)* (double)(currentDistance));
 			assert(isfinite(currG));
 
@@ -2491,7 +2461,6 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 				float cosThetaBRDF = dot(prevVert.surfaceNormal, currentDir);
 				if (cosThetaBRDF <= 0.0f) {
 					cout << "wrong outgoing direction at surface!: cosTheta = " << cosThetaBRDF << endl;
-					rejectedSuccessfulPaths[threadID]++;
 					return errorValue;
 				}
 				assert(cosThetaBRDF > 0.0f);
@@ -2505,7 +2474,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 				float cosThetaPhase = dot(previousDir, currentDir);
 				double phase = (double)henyeyGreenstein(cosThetaPhase, medium.hg_g_F);
 
-				measurementContrib *= mu_s * phase;
+				measurementContrib *= medium.mu_s * phase;
 				pathTracingPDF *= phase;
 			}
 
@@ -2522,7 +2491,6 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 				}
 				else {
 					cout << "path hits light from backside!" << endl;
-					rejectedSuccessfulPaths[threadID]++;
 					return errorValue;
 				}
 			}
@@ -2531,8 +2499,6 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 				if (currVert.vertexType == TYPE_SURFACE) {
 					float cosTheta = dot(currVert.surfaceNormal, -currentDir);
 					if (cosTheta <= 0.0f) {
-						//cout << "Surface cosTheta <= 0.0f: " << setprecision(12) << cosTheta<< endl;
-						rejectedSuccessfulPaths[threadID]++;
 						return errorValue;
 					}
 					assert(cosTheta > 0.0f);
@@ -2543,7 +2509,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 				}
 				else {
 					measurementContrib *= currTransmittance * currG;
-					pathTracingPDF *= mu_t * currTransmittance * currG;
+					pathTracingPDF *= medium.mu_t * currTransmittance * currG;
 				}
 			}
 
@@ -2656,7 +2622,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 
 					float distanceToPrevVertex = tl_seedSegmentLengths[s];
 
-					double combinedPDF = (mu_t * uvPerturbPDF);
+					double combinedPDF = (medium.mu_t * uvPerturbPDF);
 					perturbationPDF *= combinedPDF;
 				}
 
@@ -2664,7 +2630,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 				if (validMVNEEPath) {
 					float lastSeedSegmentLength = tl_seedSegmentLengths[mvneeSegmentCount - 1];
 					if (lastSeedSegmentLength >= 0.0f) {
-						perturbationPDF *= exp(-mu_t * (double)distanceToLight);
+						perturbationPDF *= exp(-medium.mu_t * (double)distanceToLight);
 
 						double finalEstimatorPDF = pathTracingStartPDF * scene->lightSource->getPositionSamplingPDF() * perturbationPDF;
 						if (isfinite(finalEstimatorPDF)) {
@@ -3096,7 +3062,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 					if (scene->lightSource->validHitDirection(currDir)) {
 
 						//update contribution
-						double transmittance = exp(-mu_t * ray.tfar);
+						double transmittance = exp(-medium.mu_t * ray.tfar);
 						float cosThetaLight = dot(-currDir, scene->lightSource->normal);
 						double G = cosThetaLight / ((double)ray.tfar * (double)ray.tfar);
 						measurementContrib *= transmittance * G;
@@ -3124,7 +3090,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 
 
 				//update pdf and mc:
-				double transmittance = exp(-mu_t * ray.tfar);
+				double transmittance = exp(-medium.mu_t * ray.tfar);
 				float cosThetaSurface = dot(-currDir, intersectionNormal);
 				double G = cosThetaSurface / ((double)ray.tfar * (double)ray.tfar);
 				measurementContrib *= transmittance * G;
@@ -3164,14 +3130,14 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 
 
 			//update pdf and mc:
-			double transmittance = exp(-mu_t * freePathLength);
+			double transmittance = exp(-medium.mu_t * freePathLength);
 			double G = 1.0 / ((double)freePathLength * (double)freePathLength);
 			if (!isfinite(G)) {
 				break;
 			}
 			assert(isfinite(G));
 			measurementContrib *= transmittance * G;
-			pathTracingPDF *= mu_t * transmittance * G;
+			pathTracingPDF *= medium.mu_t * transmittance * G;
 			tl_cumulativePathTracingPDFs[pathTracingPath->getSegmentLength()] = pathTracingPDF;
 
 
@@ -3181,7 +3147,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 			//update pdf and mc for phase function
 			float cos_theta_Phase = dot(currDir, newDir);
 			double phase = (double)henyeyGreenstein(cos_theta_Phase, medium.hg_g_F);
-			newMeasurementContrib = measurementContrib * mu_s * phase;
+			newMeasurementContrib = measurementContrib * medium.mu_s * phase;
 			pathTracingPDF *= phase;
 
 			//update variables:
@@ -3805,7 +3771,6 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 		vec3 previousDir = vertex2.vertex - vertex1.vertex;
 		float previousDistance = length(previousDir);
 		if (previousDistance <= 0.0f) {
-			rejectedSuccessfulPaths[threadID]++;
 			return errorValue;
 		}
 		previousDir /= previousDistance;
@@ -3818,12 +3783,11 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 			vec3 currentDir = currVert.vertex - prevVert.vertex;
 			float currentDistance = length(currentDir);
 			if (currentDistance <= 0.0f) {
-				rejectedSuccessfulPaths[threadID]++;
 				return errorValue;
 			}
 			currentDir = currentDir / currentDistance; //normalize direction
 
-			double currTransmittance = exp(-mu_t * (double)currentDistance);
+			double currTransmittance = exp(-medium.mu_t * (double)currentDistance);
 			double currG = 1.0 / ((double)(currentDistance)* (double)(currentDistance));
 			assert(isfinite(currG));
 
@@ -3836,7 +3800,6 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 				float cosThetaBRDF = dot(prevVert.surfaceNormal, currentDir);
 				if (cosThetaBRDF <= 0.0f) {
 					cout << "wrong outgoing direction at surface!: cosTheta = " << cosThetaBRDF << endl;
-					rejectedSuccessfulPaths[threadID]++;
 					return errorValue;
 				}
 				assert(cosThetaBRDF > 0.0f);
@@ -3850,7 +3813,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 				float cosThetaPhase = dot(previousDir, currentDir);
 				double phase = (double)henyeyGreenstein(cosThetaPhase, medium.hg_g_F);
 
-				measurementContrib *= mu_s * phase;
+				measurementContrib *= medium.mu_s * phase;
 				pathTracingPDF *= phase;
 			}
 
@@ -3867,7 +3830,6 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 				}
 				else {
 					cout << "path hits light from backside!" << endl;
-					rejectedSuccessfulPaths[threadID]++;
 					return errorValue;
 				}
 			}
@@ -3876,8 +3838,6 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 				if (currVert.vertexType == TYPE_SURFACE) {
 					float cosTheta = dot(currVert.surfaceNormal, -currentDir);
 					if (cosTheta <= 0.0f) {
-						//cout << "Surface cosTheta <= 0.0f: " << setprecision(12) << cosTheta<< endl;
-						rejectedSuccessfulPaths[threadID]++;
 						return errorValue;
 					}
 					assert(cosTheta > 0.0f);
@@ -3888,7 +3848,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 				}
 				else {
 					measurementContrib *= currTransmittance * currG;
-					pathTracingPDF *= mu_t * currTransmittance * currG;
+					pathTracingPDF *= medium.mu_t * currTransmittance * currG;
 				}
 			}
 
@@ -3986,7 +3946,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 
 					float distanceToPrevVertex = tl_seedSegmentLengths[s];
 
-					double combinedPDF = (mu_t * uvPerturbPDF);
+					double combinedPDF = (medium.mu_t * uvPerturbPDF);
 					perturbationPDF *= combinedPDF;
 				}
 
@@ -3994,7 +3954,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 				if (validMVNEEPath) {
 					float lastSeedSegmentLength = tl_seedSegmentLengths[mvneeSegmentCount - 1];
 					if (lastSeedSegmentLength >= 0.0f) {
-						perturbationPDF *= exp(-mu_t * (double)distanceToLight);
+						perturbationPDF *= exp(-medium.mu_t * (double)distanceToLight);
 
 						double finalEstimatorPDF = pathTracingStartPDF * scene->lightSource->getPositionSamplingPDF() * perturbationPDF;
 						if (isfinite(finalEstimatorPDF)) {
@@ -4411,7 +4371,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 					 if (scene->lightSource->validHitDirection(currDir)) {
 
 						 //update contribution
-						 double transmittance = exp(-mu_t * ray.tfar);
+						 double transmittance = exp(-medium.mu_t * ray.tfar);
 						 float cosThetaLight = dot(-currDir, scene->lightSource->normal);
 						 double G = cosThetaLight / ((double)ray.tfar * (double)ray.tfar);
 						 measurementContrib *= transmittance * G;
@@ -4439,7 +4399,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 
 
 				 //update pdf and mc:
-				 double transmittance = exp(-mu_t * ray.tfar);
+				 double transmittance = exp(-medium.mu_t * ray.tfar);
 				 float cosThetaSurface = dot(-currDir, intersectionNormal);
 				 double G = cosThetaSurface / ((double)ray.tfar * (double)ray.tfar);
 				 measurementContrib *= transmittance * G;
@@ -4479,14 +4439,14 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 
 
 			 //update pdf and mc:
-			 double transmittance = exp(-mu_t * freePathLength);
+			 double transmittance = exp(-medium.mu_t * freePathLength);
 			 double G = 1.0 / ((double)freePathLength * (double)freePathLength);
 			 if (!isfinite(G)) {
 				 break;
 			 }
 			 assert(isfinite(G));
 			 measurementContrib *= transmittance * G;
-			 pathTracingPDF *= mu_t * transmittance * G;
+			 pathTracingPDF *= medium.mu_t * transmittance * G;
 			 tl_cumulativePathTracingPDFs[pathTracingPath->getSegmentLength()] = pathTracingPDF;
 
 
@@ -4496,7 +4456,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 			 //update pdf and mc for phase function
 			 float cos_theta_Phase = dot(currDir, newDir);
 			 double phase = (double)henyeyGreenstein(cos_theta_Phase, medium.hg_g_F);
-			 newMeasurementContrib = measurementContrib * mu_s * phase;
+			 newMeasurementContrib = measurementContrib * medium.mu_s * phase;
 			 pathTracingPDF *= phase;
 
 			 //update variables:
@@ -5244,11 +5204,6 @@ void VolumeRenderer::printRenderingParameters(int sampleCount, double duration)
 	paramsFile.append("_params.txt");
 	ofstream o(paramsFile.c_str(), ios::out);
 
-	glm::int64 successfulPathCount = 0;
-	for (int i = 0; i < rendering.THREAD_COUNT; i++) {
-		successfulPathCount += successfulPathCounter[i];
-	}
-
 	o << "Integrator: " << endl;
 	switch (rendering.integrator) {
 		case TEST_RENDERING: o << "Test Rendering" << endl; break;
@@ -5258,9 +5213,6 @@ void VolumeRenderer::printRenderingParameters(int sampleCount, double duration)
 		case PATH_TRACING_NEE_MIS: o << "Path Tracing with NEE and MIS in homogeneous medium" << endl; break;
 		case PATH_TRACING_MVNEE: o << "Path Tracing with MVNEE and MIS in homogeneous medium" << endl; break;
 		case PATH_TRACING_MVNEE_FINAL: o << "Path Tracing with MVNEE and MIS in homogeneous medium: final optimized version" << endl; break;
-		/*case PATH_TRACING_MVNEE_OPTIMIZED: o << "Path Tracing with MVNEE and MIS in homogeneous medium - Optimized version" << endl; break;
-		case PATH_TRACING_MVNEE_OPTIMIZED2: o << "Path Tracing with MVNEE and MIS in homogeneous medium - Optimized2 second version" << endl; break;
-		case PATH_TRACING_MVNEE_OPTIMIZED3: o << "Path Tracing with MVNEE and MIS in homogeneous medium - Optimized3 third version" << endl; break;*/
 		case PATH_TRACING_MVNEE_GAUSS_PERTURB: o << "Path Tracing with MVNEE and MIS in homogeneous medium - Gauss perturbation!" << endl; break;
 		case PATH_TRACING_MVNEE_Constants_ALPHA: o << "Path Tracing with MVNEE and MIS in homogeneous medium - GGX perturbation with Constants ALPHA!" << endl; break;
 		default: o << "DEFAULT: Integrator unknown!" << endl; break;
@@ -5270,7 +5222,6 @@ void VolumeRenderer::printRenderingParameters(int sampleCount, double duration)
 	o << "Num Samples: " << sampleCount << endl;
 	o << "maximum path length: " << rendering.MAX_SEGMENT_COUNT << endl;
 	o << "maximum expected MVNEE segments: " << rendering.MAX_MVNEE_SEGMENTS << endl;
-	o << "count of successful paths: " << successfulPathCount << endl;
 	o << endl;
 	scene->lightSource->printParameters(o);	
 	o << endl;
@@ -5293,36 +5244,6 @@ void VolumeRenderer::printRenderingParameters(int sampleCount, double duration)
 	o.close();
 }
 
-void VolumeRenderer::printCounters()
-{
-	glm::int64 successfulPathCount = 0;
-	glm::int64 pathTooShortCount = 0;
-	glm::int64 successfullySampledCount = 0;
-	glm::int64 rejectedSuccessfulCount = 0;
-	glm::int64 occludedPathCount = 0;
-	for (int i = 0; i < rendering.THREAD_COUNT; i++) {
-		successfulPathCount += successfulPathCounter[i];
-		pathTooShortCount += segmentsTooShortCounter[i];
-		successfullySampledCount += successfullyCreatedPaths[i];
-		rejectedSuccessfulCount += rejectedSuccessfulPaths[i];
-		occludedPathCount += occludedPathCounter[i];
-	}
-
-	//save textual output of all the parameters (volume, samples, lamp,...)
-	string paramsFile = rendering.sessionName;
-	paramsFile.append("_counters.txt");
-	ofstream o(paramsFile.c_str(), ios::out);
-	
-	
-	o << "count of successfully sampled paths: " << successfullySampledCount << endl;
-	o << "     count of successful paths: " << successfulPathCount << endl;
-	o << "     count of rejected successfully sampled paths: " << rejectedSuccessfulCount << endl;
-	o << "---------------------" << endl;
-	o << "count of occluded paths: " << occludedPathCount << endl;
-	o << "count of paths with segment counts too short: " << pathTooShortCount << endl;
-
-	o.close();
-}
 
 void VolumeRenderer::writeBufferToFloatFile(const string& fileName, int width, int height, vec3* buffer) {
 	string fileN = fileName;

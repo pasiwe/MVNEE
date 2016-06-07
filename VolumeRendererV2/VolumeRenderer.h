@@ -290,5 +290,4 @@ private:
 	//output meta files:
 	void printRenderingParameters(int sampleCount, double duration);
 	vec3 calcMeanImageBrightnessBlockwise();
-	void printCounters();	
 };

@@ -247,7 +247,7 @@ public:
 					vector<StringParser> faceList = vector<StringParser>();
 					faceStrings.split(' ', &faceList);
 
-					int faceVertexCount = faceList.size();
+					int faceVertexCount = (int)faceList.size();
 					//only triangels allowed for now!;
 					assert(faceVertexCount == 3);
 
@@ -273,8 +273,8 @@ public:
 			}
 		}
 
-		int vertexCount = vertices.size();
-		int faceCount = faces.size();
+		int vertexCount = (int)vertices.size();
+		int faceCount = (int)faces.size();
 
 		cout << " has " << faceCount << " triangles." << endl;
 
@@ -683,14 +683,14 @@ public:
 					objID = addObject(objFilePath, name, albedo, translation, scale);					
 				}
 				else if (modelType == "plane") {
-					StringParser translationS = objectNode->first_node("transform")->first_attribute("translate")->value();
+					StringParser translationS = objectNode->first_node("transform")->first_attribute("y")->value();
 					float yTransl = translationS.getFloatParam("");
 					StringParser scaleS = objectNode->first_node("transform")->first_attribute("scale")->value();
 					float scale = scaleS.getFloatParam("");
 					StringParser colorS = objectNode->first_node("material")->first_attribute("albedo")->value();
 					vec3 albedo = colorS.getVec3Param("");
 
-					addGroundPlane(name, albedo, scale, yTransl);
+					objID = addGroundPlane(name, albedo, scale, yTransl);
 				}
 				else {
 					cout << "invalid model type!" << modelType << endl;

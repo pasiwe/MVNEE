@@ -42,6 +42,8 @@ class Path
 
 private:
 
+	const int MAX_SEGMENT_COUNT;
+
 	/** Number of segments (vertex-to-vertex-conenction) of the path */
 	int segmentLength;
 
@@ -54,21 +56,26 @@ private:
 	int maxPathVertices;
 
 	/** Vertices of the path. Starting at the image plane vertex, ending on a light vertex. */
-	PathVertex pathVertices[RenderingSettings::MAX_SEGMENT_COUNT + 1];
+	//PathVertex pathVertices[RenderingSettings::MAX_SEGMENT_COUNT + 1];
+	PathVertex* pathVertices;
 
 public:
-	Path()
+	Path(const int MAX_SEGMENT_COUNT) : MAX_SEGMENT_COUNT(MAX_SEGMENT_COUNT)
 	{
 		segmentLength = -1;
-		maxPathVertices = RenderingSettings::MAX_SEGMENT_COUNT + 1;
+		maxPathVertices = MAX_SEGMENT_COUNT + 1;
+		pathVertices = new PathVertex[maxPathVertices];
+
 		vertexCount = 0;
 		pathTracingVertexCount = 0;
 	}
 
-	Path(const PathVertex& startVertex)
+	Path(const PathVertex& startVertex, const int MAX_SEGMENT_COUNT) : MAX_SEGMENT_COUNT(MAX_SEGMENT_COUNT)
 	{
 		segmentLength = 0;
-		maxPathVertices = RenderingSettings::MAX_SEGMENT_COUNT + 1;
+		maxPathVertices = MAX_SEGMENT_COUNT + 1;
+
+		pathVertices = new PathVertex[maxPathVertices];
 
 		vertexCount = 0;
 		pathVertices[vertexCount] = startVertex;
@@ -78,7 +85,7 @@ public:
 
 	~Path()
 	{
-
+		delete[] pathVertices;
 	}
 
 	/* Resets all attributes, so the Path can be reused without having to create a new instance */

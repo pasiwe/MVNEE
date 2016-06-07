@@ -63,7 +63,7 @@ struct Medium
 	float hg_g_F;
 
 	double meanFreePath;
-	double meanFreePathF;
+	float meanFreePathF;
 };
 
 struct Rendering
