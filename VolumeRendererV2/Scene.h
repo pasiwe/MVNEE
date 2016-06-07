@@ -467,10 +467,40 @@ public:
 			xml_node<> *cameraNode = sceneNode->first_node("camera");
 			for (xml_node<> * camSubNode = cameraNode->first_node(); camSubNode; camSubNode = camSubNode->next_sibling()) {
 				string currName = camSubNode->name();
+				xml_attribute<> *camAttr = camSubNode->first_attribute();
+				string camValue = camAttr->value();
+				if (currName == "distanceToImagePlane") {
+					camera.distanceToImagePlane = (float)atof(camValue.data());
+				}
+				else if (currName == "imagePlaneWidth") {
+					camera.imagePlaneWidth = (float)atof(camValue.data());
+				}
+				else if (currName == "imagePlaneHeight") {
+					camera.imagePlaneHeight = (float)atof(camValue.data());
+				}
+				else if (currName == "lookAt") {
+					StringParser originS = camSubNode->first_attribute("origin")->value();
+					StringParser targetS = camSubNode->first_attribute("target")->value();
+					StringParser upS = camSubNode->first_attribute("up")->value();
+
+					vec3 origin = originS.getVec3Param("");
+					vec3 target = targetS.getVec3Param("");
+					vec3 up = normalize(upS.getVec3Param(""));
+					vec3 lookAt = normalize(target - origin);
+					vec3 right = cross(up, lookAt);
+
+					camera.cameraOrigin = origin;
+					camera.camLookAt = lookAt;
+					camera.camUp = up;
+					camera.camRight = right;
+				}
 			}
 
 			//Lightsource
 			xml_node<> *lightNode = sceneNode->first_node("lightsource");
+			for (xml_node<> * lightSubNode = lightNode->first_node(); lightSubNode; lightSubNode = lightSubNode->next_sibling()) {
+
+			}
 
 			//MediumSettings
 

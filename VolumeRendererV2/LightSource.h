@@ -95,14 +95,14 @@ public:
 		float distance = fabsf(length(centerToIsect));
 		//distance has to be within radius
 		if (distance <= radius) {
-			if (distance <= RenderingSettings::epsilon) {
+			if (distance <= Constants::epsilon) {
 				//so close, it is definitively a hit
 				intersected = true;
 			}
 			else {
 				//check if vertex lies on the plane
 				float zDist = dot(centerToIsect, normal);
-				if (fabsf(zDist) <= RenderingSettings::epsilon) {
+				if (fabsf(zDist) <= Constants::epsilon) {
 					intersected = true;
 				}
 			}

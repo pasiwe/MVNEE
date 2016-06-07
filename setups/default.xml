@@ -3,15 +3,18 @@
 <scene version="1.0.0">
 	<integrator type="mvnee"/>
 
-	<camera type="perspective">
-		<lookAt origin="278, 273, -800" target="278, 273, -799" up="0, 1, 0"/>
+	<camera type="perspective">		
 		<distanceToImagePlane value="1.0"/>
 		<imagePlaneWidth value="1.0"/>
 		<imagePlaneHeight value="1.0"/>
+		<lookAt origin="0 0 -2" target="0 0 1" up="0 1 0"/>
 	</camera>
 	
 	<lightsource type="lightdisk">
-		<spectrum name="radiance" value="400:0, 500:8, 600:15.6, 700:18.4"/>
+		<position center="0 1 1" normal="0 -1 0"/>
+		<radius value="0.2"/>
+		<brightness value="60.0"/>
+		<color value="1.0 1.0 1.0"/>
 	</lightsource>
 
 	<model type="obj">

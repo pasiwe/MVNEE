@@ -204,7 +204,11 @@ StringParser StringParser::extractFileNameFromFilePath()
 */
 string StringParser::retrieveArgumentForParam(string paramName)
 {
-	int paramSize = (int) paramName.size() + 1; //skip the whitespace
+	int paramSize = (int)paramName.size();
+	if (paramSize > 0) {
+		paramSize += 1; //skip the whitespace
+	}
+	
 	int argSize = (int)stringData.size() - paramSize;
 
 	//ignore ALL whitespaces following the paramName
