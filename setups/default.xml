@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<scene version="1.0.0">
+	<integrator type="mvnee"/>
+
+	<camera type="perspective">
+		<lookAt origin="278, 273, -800" target="278, 273, -799" up="0, 1, 0"/>
+		<distanceToImagePlane value="1.0"/>
+		<imagePlaneWidth value="1.0"/>
+		<imagePlaneHeight value="1.0"/>
+	</camera>
+	
+	<lightsource type="lightdisk">
+		<spectrum name="radiance" value="400:0, 500:8, 600:15.6, 700:18.4"/>
+	</lightsource>
+
+	<model type="obj">
+		<string name="filename" value="meshes/cbox_luminaire.obj"/>
+		<transform name="toWorld">
+			<translate x="0" y="-0.5" z="0"/>
+		</transform>
+
+		<ref id="light"/>		
+	</model>
+	
+</scene>
