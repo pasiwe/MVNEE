@@ -25,18 +25,13 @@ enum IntegratorEnum {
 	PATH_TRACING_MVNEE,
 	PATH_TRACING_MVNEE_FINAL,
 	PATH_TRACING_MVNEE_GAUSS_PERTURB,
-	PATH_TRACING_MVNEE_CONSTANT_ALPHA,
+	PATH_TRACING_MVNEE_Constants_ALPHA,
 	TEST_RENDERING
 };
 
-namespace MediumParameters
+namespace Constants
 {
-	const double mu_s = 1.0;
-	const double mu_a = 0.0;
-	const double mu_t = mu_s + mu_a;
-
-	const double hg_g = 0.8;
-	const float hg_g_F = 0.8f;
+	const float epsilon = 0.0001f;
 
 	//sigma-values for mean cosines 0.0, 0.1,..., 0.9 for 1 mfp:
 	const double sigmaPhi[10] = {
@@ -52,15 +47,67 @@ namespace MediumParameters
 		0.0830828
 	};
 
+	const double GGX_CONVERSION_Constants = 1.637618734;
+
+	//blockwise mean image brightness
+	const int TILES_SIDE = 8;
+}
+
+struct Medium
+{
+	double mu_s; //scattering coefficient
+	double mu_a; //absorption coefficient
+	double mu_t; //extinction coefficient
+
+	double hg_g; //mean cosine for Henyey Greenstein
+	float hg_g_F;
+
+	double meanFreePath;
+	double meanFreePathF;
+};
+
+struct Rendering
+{
+	bool RENDER_PARALLEL;
+	int THREAD_COUNT;
+
+	//maximal path segment count, before rendering is stopped
+	int MAX_SEGMENT_COUNT;
+
+	/* an initial maximum number of MVNEE segments:
+	* if the distance to light divided by the mean free path is greater than MAX_MVNEE_SEGMENTS,
+	* MVNEE will not be executed!
+	*/
+	int MAX_MVNEE_SEGMENTS;
+	float MAX_MVNEE_SEGMENTS_F;
+
+	//image settings
+	int WIDTH;
+	int HEIGHT;
+	int SAMPLE_COUNT;
+
+	string sessionName;
+
+	//specify integrator here:
+	IntegratorEnum integrator;
+};
+
+namespace MediumParameters
+{
+	const double mu_s = 1.0;
+	const double mu_a = 0.0;
+	const double mu_t = mu_s + mu_a;
+
+	const double hg_g = 0.8;
+	const float hg_g_F = 0.8f;	
+
 	const double meanFreePath = 1.0 / mu_t;
 	const float meanFreePathF = 1.0f / (float)mu_t;
-
-	const double GGX_CONVERSION_CONSTANT = 1.637618734;
+	
 }
 
 namespace RenderingSettings
 {
-	const float epsilon = 0.0001f;
 
 	const bool RENDER_PARALLEL = true;
 	//const int THREAD_COUNT = 8;

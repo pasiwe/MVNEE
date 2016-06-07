@@ -32,7 +32,15 @@ int main(int argc, const char* argv[])
 	//create and fill scene
 	Scene* sceneObject = new Scene(scene);
 
-
+	if (argc == 1) {
+		cout << "No scene file provided: Default Settings used." << endl;
+		sceneObject->readSceneXML("../setups/default.xml");
+	}
+	else if (argc == 2) {
+		//scene file potentially provided
+		string settingsFilePath = argv[1];
+		sceneObject->readSceneXML(settingsFilePath);
+	}
 
 	bool geometryIncluded = true;
 	if (geometryIncluded) {

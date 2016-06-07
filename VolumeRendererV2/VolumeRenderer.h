@@ -209,7 +209,7 @@ private:
 
 	/**
 	* Calculates the measurement contribution as well as the path tracing PDF of the given path.
-	* On top of that, the PDFs of all MVNEE estimators are calculated. THIS IS AN OPTIMIZED VERSION (see "pathTracing_MVNEE_ConstantAlpha"):
+	* On top of that, the PDFs of all MVNEE estimators are calculated. THIS IS AN OPTIMIZED VERSION (see "pathTracing_MVNEE_ConstantsAlpha"):
 	* many unnecessary loop iterations are avoided, further small tweaks are used in order to speed up execution. A lot of pdf and measurement contrib
 	* calcualtion steps can be avoided, as those are calcualted whilst sampling the path.
 	*
@@ -227,7 +227,7 @@ private:
 	* @param currentColorThroughput:  color threoughput of the path from start to the vertex at "estimatorIndex"
 	* @return: the MIS weighted contribution of the path
 	*/
-	inline vec3 calcFinalWeightedContribution_ConstantAlpha(Path* path, const int estimatorIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput);
+	inline vec3 calcFinalWeightedContribution_ConstantsAlpha(Path* path, const int estimatorIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput);
 
 	/**
 	* Combination of path tracing with Multiple Vertex Next Event Estimation (MVNEE) for direct lighting calculation at vertices in the medium,
@@ -243,7 +243,7 @@ private:
 	* Further a lot of path tracing pdf and measurement contrib calcualtions are avoided by acumulating pdf and measurement contrib whilst
 	* sampling the path.
 	*/
-	vec3 pathTracing_MVNEE_ConstantAlpha(const vec3& rayOrigin, const vec3& rayDir);
+	vec3 pathTracing_MVNEE_ConstantsAlpha(const vec3& rayOrigin, const vec3& rayDir);
 
 	inline double sample1D(const int threadID);
 	inline double sample1DOpenInterval(const int threadID);

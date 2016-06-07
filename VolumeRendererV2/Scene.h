@@ -23,7 +23,11 @@
 #include "LightSource.h"
 #include "Settings.h"
 
+#include <rapidXML/rapidxml.hpp>
+#include <rapidXML/rapidxml_utils.hpp>
+
 using namespace std;
+using namespace rapidxml;
 using glm::vec3;
 
 struct vector3{ float x, y, z; };
@@ -396,8 +400,8 @@ public:
 		shadowRay.dir[0] = dirToLight[0];
 		shadowRay.dir[1] = dirToLight[1];
 		shadowRay.dir[2] = dirToLight[2];
-		shadowRay.tnear = RenderingSettings::epsilon;
-		shadowRay.tfar = distanceToLight - RenderingSettings::epsilon;
+		shadowRay.tnear = Constants::epsilon;
+		shadowRay.tfar = distanceToLight - Constants::epsilon;
 		shadowRay.geomID = 1;
 		shadowRay.primID = 0;
 		shadowRay.mask = -1;
@@ -422,6 +426,68 @@ public:
 			}
 		}
 		output = line;
+	}
+
+	/**
+	* Reads a scene from an xml scene file.
+	*/
+	bool readSceneXML(const string& settingsFilePath)
+	{
+		//check for correct file:
+		ifstream file;
+		file.open(settingsFilePath, ios::in); // opens as ASCII!
+		if (!file) {
+			return false;
+		}
+		file.close();
+
+		//convert xml fle to zero terminated string
+		rapidxml::file<> xmlFile(settingsFilePath.c_str());
+
+		if (xmlFile.size() <= 0) {
+			return false;
+		}
+
+		xml_document<> doc;
+		doc.parse<0>(xmlFile.data());
+
+		//read the data:
+		xml_node<> *sceneNode = doc.first_node("scene");
+		xml_attribute<> *version =  sceneNode->first_attribute("version");
+		string v = version->value();
+		cout << "Scene: version " << v << endl;
+		if (v == "1.0.0") {
+
+			//Integrator
+			xml_node<> *integratorNode = sceneNode->first_node("integrator");
+			xml_attribute<> *integratorType = integratorNode->first_attribute("type");
+			string integrator = integratorType->value();
+
+			//Camera
+			xml_node<> *cameraNode = sceneNode->first_node("camera");
+			for (xml_node<> * camSubNode = cameraNode->first_node(); camSubNode; camSubNode = camSubNode->next_sibling()) {
+				string currName = camSubNode->name();
+			}
+
+			//Lightsource
+			xml_node<> *lightNode = sceneNode->first_node("lightsource");
+
+			//MediumSettings
+
+			//Models/Objects
+		}
+		else {
+			return false;
+		}
+
+		//for (xml_attribute<> *attr = sceneNode->first_attribute();
+		//	attr; attr = attr->next_attribute())
+		//{
+		//	cout << "Node foobar has attribute " << attr->name() << " ";
+		//	cout << "with value " << attr->value() << "\n";
+		//}
+
+		return true;
 	}
 
 	/**

@@ -35,10 +35,10 @@ VolumeRenderer::VolumeRenderer(RTCScene sceneGeometry, Scene* scene) :
 	double misWeight = t - floorf(t);
 	//linear interpolation of sigmaPhi if between two values:
 	if (upper <= 9) {
-		sigmaForHG = mix(MediumParameters::sigmaPhi[lower], MediumParameters::sigmaPhi[upper], misWeight);
+		sigmaForHG = mix(Constants::sigmaPhi[lower], Constants::sigmaPhi[upper], misWeight);
 	}
 	else {
-		sigmaForHG = mix(MediumParameters::sigmaPhi[lower], 0.0, misWeight);
+		sigmaForHG = mix(Constants::sigmaPhi[lower], 0.0, misWeight);
 	}
 }
 
@@ -101,7 +101,7 @@ void VolumeRenderer::renderScene()
 		case PATH_TRACING_MVNEE_OPTIMIZED2: integrator = &VolumeRenderer::pathTracing_MVNEE_Optimized2; break;
 		case PATH_TRACING_MVNEE_OPTIMIZED3: integrator = &VolumeRenderer::pathTracing_MVNEE_Optimized3; break;*/
 		case PATH_TRACING_MVNEE_GAUSS_PERTURB: integrator = &VolumeRenderer::pathTracing_MVNEE_GaussPerturb; break;
-		case PATH_TRACING_MVNEE_CONSTANT_ALPHA: integrator = &VolumeRenderer::pathTracing_MVNEE_ConstantAlpha; break;
+		case PATH_TRACING_MVNEE_Constants_ALPHA: integrator = &VolumeRenderer::pathTracing_MVNEE_ConstantsAlpha; break;
 	}
 
 	//Start time measurement
@@ -221,7 +221,7 @@ void VolumeRenderer::renderSceneWithMaximalDuration(double maxDurationMinutes)
 		case PATH_TRACING_MVNEE_OPTIMIZED2: integrator = &VolumeRenderer::pathTracing_MVNEE_Optimized2; break;
 		case PATH_TRACING_MVNEE_OPTIMIZED3: integrator = &VolumeRenderer::pathTracing_MVNEE_Optimized3; break;*/
 		case PATH_TRACING_MVNEE_GAUSS_PERTURB: integrator = &VolumeRenderer::pathTracing_MVNEE_GaussPerturb; break;
-		case PATH_TRACING_MVNEE_CONSTANT_ALPHA: integrator = &VolumeRenderer::pathTracing_MVNEE_ConstantAlpha; break;
+		case PATH_TRACING_MVNEE_Constants_ALPHA: integrator = &VolumeRenderer::pathTracing_MVNEE_ConstantsAlpha; break;
 	}	
 
 	float pixelWidth = scene->camera.imagePlaneWidth / (float)RenderingSettings::WIDTH;
@@ -467,7 +467,7 @@ vec3 VolumeRenderer::pathTracingNoScattering(const vec3& rayOrigin, const vec3& 
 		vec3 intersectionNormal;
 		if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal)) {
 			//avoid self intersection!!
-			if (ray.tfar > RenderingSettings::epsilon) {				
+			if (ray.tfar > Constants::epsilon) {
 
 				vec3 intersectionPos = currPosition + ray.tfar * currDir;
 
@@ -504,7 +504,7 @@ vec3 VolumeRenderer::pathTracingNoScattering(const vec3& rayOrigin, const vec3& 
 				measurementContrib *= evalDiffuseBRDF(surfaceData.albedo) * cos_theta;
 				pdf *= diffuseBRDFSamplingPDF(intersectionNormal, newDir);
 
-				currPosition = intersectionPos + RenderingSettings::epsilon * intersectionNormal;
+				currPosition = intersectionPos + Constants::epsilon * intersectionNormal;
 				currDir = newDir;
 				currSegmentLength++;
 			}
@@ -596,7 +596,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS_NoScattering(const vec3& rayOrigin, con
 			if (cos_theta_i > 0.0f) {
 				RTCRay shadowRay;
 				//if (!scene->surfaceOccluded(intersectionPos, dirToLight, distanceToLight, shadowRay)) {
-				if (!scene->surfaceOccluded(intersectionPos + RenderingSettings::epsilon * intersectionNormal, dirToLight, distanceToLight, shadowRay)) {
+				if (!scene->surfaceOccluded(intersectionPos + Constants::epsilon * intersectionNormal, dirToLight, distanceToLight, shadowRay)) {
 					float cos_theta_j = dot(-dirToLight, scene->lightSource->normal);
 					//normal culling at light
 					if (scene->lightSource->validHitDirection(dirToLight)) {
@@ -663,7 +663,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS_NoScattering(const vec3& rayOrigin, con
 			measurementContrib *= evalDiffuseBRDF(surfaceData.albedo) * cos_theta;
 
 			currNormal = intersectionNormal;
-			currPosition = intersectionPos + RenderingSettings::epsilon * intersectionNormal;
+			currPosition = intersectionPos + Constants::epsilon * intersectionNormal;
 			currDir = newDir;
 			currSegmentLength++;
 		}
@@ -697,7 +697,7 @@ vec3 VolumeRenderer::pathTracingRandomWalk(const vec3& rayOrigin, const vec3& ra
 		RTCRay ray;
 		vec3 intersectionNormal;
 		if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal) && ray.tfar <= freePathLength) {
-			if (ray.tfar > RenderingSettings::epsilon) {				
+			if (ray.tfar > Constants::epsilon) {				
 
 				//surface interaction
 				vec3 intersectionPos = currPosition + ray.tfar * currDir;
@@ -751,7 +751,7 @@ vec3 VolumeRenderer::pathTracingRandomWalk(const vec3& rayOrigin, const vec3& ra
 				measurementContrib *= transmittance * (double)cos_theta;
 				pdf *= transmittance * diffuseBRDFSamplingPDF(intersectionNormal, newDir);
 
-				currPosition = intersectionPos + RenderingSettings::epsilon * intersectionNormal;
+				currPosition = intersectionPos + Constants::epsilon * intersectionNormal;
 				currDir = newDir;
 			}
 			else {
@@ -810,7 +810,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 		RTCRay ray;
 		vec3 intersectionNormal;
 		if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal) && ray.tfar <= freePathLength) {
-			if (ray.tfar > RenderingSettings::epsilon) {				
+			if (ray.tfar > Constants::epsilon) {				
 
 				//surface interaction
 				vec3 intersectionPos = currPosition + ray.tfar * currDir;
@@ -878,10 +878,10 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 
 				float cosTheta = dot(intersectionNormal, dirToLight);
 				//normal culling at surface
-				if (cosTheta > 0.0f && distToLight > RenderingSettings::epsilon) {
+				if (cosTheta > 0.0f && distToLight > Constants::epsilon) {
 					RTCRay shadowRay;
 					//if (!scene->surfaceOccluded(intersectionPos, dirToLight, distanceToLight, shadowRay)) {
-					if (!scene->surfaceOccluded(intersectionPos + RenderingSettings::epsilon * intersectionNormal, dirToLight, distToLight, shadowRay)) {
+					if (!scene->surfaceOccluded(intersectionPos + Constants::epsilon * intersectionNormal, dirToLight, distToLight, shadowRay)) {
 						double pathTracingPDF = diffuseBRDFSamplingPDF(intersectionNormal, dirToLight);
 						float cosThetaLight = dot(-dirToLight, scene->lightSource->normal);
 						//normal culling at light
@@ -931,7 +931,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 				lastDirSamplingPDF = diffuseBRDFSamplingPDF(intersectionNormal, newDir);
 				pdf *= lastDirSamplingPDF;
 
-				currPosition = intersectionPos + RenderingSettings::epsilon * intersectionNormal;
+				currPosition = intersectionPos + Constants::epsilon * intersectionNormal;
 				currDir = newDir;
 			}
 			else {
@@ -966,7 +966,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 			float distToLight = length(posToLight);
 			vec3 dirToLight = posToLight / distToLight;
 
-			if (distToLight > RenderingSettings::epsilon) {
+			if (distToLight > Constants::epsilon) {
 				RTCRay shadowRay;
 				//check visibility:
 				if (!scene->surfaceOccluded(nextPosition, dirToLight, distToLight, shadowRay)) {
@@ -1137,7 +1137,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 		path->getVertex(i - 1, prevVert);
 		vec3 currentDir = currVert.vertex - prevVert.vertex;
 		float currentDistance = length(currentDir);
-		//if (currentDistance < RenderingSettings::epsilon) {
+		//if (currentDistance < Constants::epsilon) {
 		//	//very small distance -> maybe this will become a problem later!
 		//	cout << "very small distance!" << endl;
 		//	return errorValue;
@@ -1313,7 +1313,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 					rightSideFactor = sqrt(rightSideFactor);
 
 					double sigma = calcGaussProduct(leftSideFactor * sigmaForHG, rightSideFactor * sigmaForHG);
-					double finalGGXAlpha = sigma * 1.637618734; //multiply with constant for conversion from gauss to ggx
+					double finalGGXAlpha = sigma * 1.637618734; //multiply with Constants for conversion from gauss to ggx
 
 					//update pdfs:
 					vec3 seedToPerturbed = perturbedVertex - tl_seedVertices[s];
@@ -1429,7 +1429,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 		RTCRay ray;
 		vec3 intersectionNormal;
 		if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal) && ray.tfar <= freePathLength) {
-			if (ray.tfar > RenderingSettings::epsilon) {				
+			if (ray.tfar > Constants::epsilon) {				
 
 				//////////////////////////////
 				// Surface interaction
@@ -1471,7 +1471,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 				vec3 newDir = sampleDiffuseBRDFDir(intersectionNormal, sample1D(threadID), sample1D(threadID));
 
 				//update variables:
-				currPosition = surfaceVertex + RenderingSettings::epsilon * intersectionNormal;
+				currPosition = surfaceVertex + Constants::epsilon * intersectionNormal;
 				currDir = newDir;
 			}
 			else {
@@ -1511,7 +1511,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 		vec3 lightVertex = scene->lightSource->sampleLightPosition(sample1D(threadID), sample1D(threadID));
 		vec3 forkToLight = lightVertex - forkVertex.vertex;
 		float distanceToLight = length(forkToLight);
-		if (distanceToLight > RenderingSettings::epsilon) {
+		if (distanceToLight > Constants::epsilon) {
 
 			//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
 			float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
@@ -1589,7 +1589,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 							assert(rightSideFactor > 0.0f);
 
 							double sigma = calcGaussProduct(leftSideFactor * sigmaForHG, rightSideFactor * sigmaForHG);
-							double finalGGXAlpha = sigma * 1.637618734; //conversion with constant factor
+							double finalGGXAlpha = sigma * 1.637618734; //conversion with Constants factor
 
 							//perform perturbation using ggx radius and uniform angle in u,v plane 
 							perturbVertexGGX2D(finalGGXAlpha, u, v, seedVertex, &perturbedVertex, threadID);
@@ -1599,7 +1599,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 							if (p == 0 && forkVertex.vertexType == TYPE_SURFACE) {
 								vec3 forkToFirstPerturbed = perturbedVertex - forkVertex.vertex;
 								float firstDistToPerturbed = length(forkToFirstPerturbed);
-								//if (firstDistToPerturbed >= RenderingSettings::epsilon) {
+								//if (firstDistToPerturbed >= Constants::epsilon) {
 								if (firstDistToPerturbed > 0.0f) {
 									forkToFirstPerturbed /= firstDistToPerturbed;
 									float cosThetaSurface = dot(forkToFirstPerturbed, forkVertex.surfaceNormal);
@@ -1613,7 +1613,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 									break;
 								}
 
-								previousPerturbedVertex = forkVertex.vertex + RenderingSettings::epsilon * forkVertex.surfaceNormal;
+								previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
 							}
 
 							//visibility check:
@@ -1642,7 +1642,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 								if (scene->lightSource->validHitDirection(lastSegmentDir)) {
 
 									if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
-										previousPerturbedVertex = forkVertex.vertex + RenderingSettings::epsilon * forkVertex.surfaceNormal;
+										previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
 									}
 
 									//occlusion check:
@@ -1927,7 +1927,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 					}
 
 					double sigma = calcGaussProductSquaredSigmas(leftSideFactor * sigmaForHgSquare, rightSideFactor * sigmaForHgSquare);
-					double finalGGXAlpha = sigma * MediumParameters::GGX_CONVERSION_CONSTANT; //multiply with constant for conversion from gauss to ggx
+					double finalGGXAlpha = sigma * Constants::GGX_CONVERSION_Constants; //multiply with Constants for conversion from gauss to ggx
 
 					//update pdfs:
 					vec3 seedToPerturbed = perturbedVertex - tl_seedVertices[s];
@@ -2059,7 +2059,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 		RTCRay ray;
 		vec3 intersectionNormal;
 		if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal) && ray.tfar <= freePathLength) {
-			if (ray.tfar > RenderingSettings::epsilon) {
+			if (ray.tfar > Constants::epsilon) {
 
 				//////////////////////////////
 				// Surface interaction
@@ -2132,7 +2132,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 				newColorThroughput = colorThroughput * evalDiffuseBRDF(surfaceData.albedo);
 
 				//update variables:
-				currPosition = surfaceVertex + RenderingSettings::epsilon * intersectionNormal;
+				currPosition = surfaceVertex + Constants::epsilon * intersectionNormal;
 				currDir = newDir;
 			}
 			else {
@@ -2191,7 +2191,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 		vec3 lightVertex = scene->lightSource->sampleLightPosition(sample1D(threadID), sample1D(threadID));
 		vec3 forkToLight = lightVertex - forkVertex.vertex;
 		float distanceToLight = length(forkToLight);
-		if (distanceToLight > RenderingSettings::epsilon) {
+		if (distanceToLight > Constants::epsilon) {
 
 			//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
 			float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
@@ -2271,7 +2271,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 							}
 							
 							double sigma = calcGaussProductSquaredSigmas(leftSideFactor * sigmaForHgSquare, rightSideFactor * sigmaForHgSquare);
-							double finalGGXAlpha = sigma * MediumParameters::GGX_CONVERSION_CONSTANT; //conversion with constant factor
+							double finalGGXAlpha = sigma * Constants::GGX_CONVERSION_Constants; //conversion with Constants factor
 
 							//perform perturbation using ggx radius and uniform angle in u,v plane 
 							perturbVertexGGX2D(finalGGXAlpha, u, v, seedVertex, &perturbedVertex, threadID);
@@ -2293,7 +2293,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 									break;
 								}
 
-								previousPerturbedVertex = forkVertex.vertex + RenderingSettings::epsilon * forkVertex.surfaceNormal;
+								previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
 							}
 
 							//visibility check:
@@ -2322,7 +2322,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 								if (scene->lightSource->validHitDirection(lastSegmentDir)) {
 
 									if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
-										previousPerturbedVertex = forkVertex.vertex + RenderingSettings::epsilon * forkVertex.surfaceNormal;
+										previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
 									}
 
 									//occlusion check:
@@ -3043,7 +3043,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 		RTCRay ray;
 		vec3 intersectionNormal;
 		if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal) && ray.tfar <= freePathLength) {
-			if (ray.tfar > RenderingSettings::epsilon) {
+			if (ray.tfar > Constants::epsilon) {
 
 				//////////////////////////////
 				// Surface interaction
@@ -3116,7 +3116,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 				newColorThroughput = colorThroughput * evalDiffuseBRDF(surfaceData.albedo);
 
 				//update variables:
-				currPosition = surfaceVertex + RenderingSettings::epsilon * intersectionNormal;
+				currPosition = surfaceVertex + Constants::epsilon * intersectionNormal;
 				currDir = newDir;
 			}
 			else {
@@ -3175,7 +3175,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 		vec3 lightVertex = scene->lightSource->sampleLightPosition(sample1D(threadID), sample1D(threadID));
 		vec3 forkToLight = lightVertex - forkVertex.vertex;
 		float distanceToLight = length(forkToLight);
-		if (distanceToLight > RenderingSettings::epsilon) {
+		if (distanceToLight > Constants::epsilon) {
 
 			//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
 			float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
@@ -3276,7 +3276,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 									break;
 								}
 
-								previousPerturbedVertex = forkVertex.vertex + RenderingSettings::epsilon * forkVertex.surfaceNormal;
+								previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
 							}
 
 							//visibility check:
@@ -3305,7 +3305,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 								if (scene->lightSource->validHitDirection(lastSegmentDir)) {
 
 									if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
-										previousPerturbedVertex = forkVertex.vertex + RenderingSettings::epsilon * forkVertex.surfaceNormal;
+										previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
 									}
 
 									//occlusion check:
@@ -3392,7 +3392,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 		RTCRay ray;
 		vec3 intersectionNormal;
 		if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal) && ray.tfar <= freePathLength) {
-			if (ray.tfar > RenderingSettings::epsilon) {
+			if (ray.tfar > Constants::epsilon) {
 
 				//////////////////////////////
 				// Surface interaction
@@ -3464,7 +3464,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 				newColorThroughput *= colorThroughput * evalDiffuseBRDF(surfaceData.albedo);
 
 				//update variables:
-				currPosition = surfaceVertex + RenderingSettings::epsilon * intersectionNormal;
+				currPosition = surfaceVertex + Constants::epsilon * intersectionNormal;
 				currDir = newDir;
 			}
 			else {
@@ -3523,7 +3523,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 		vec3 lightVertex = scene->lightSource->sampleLightPosition(sample1D(threadID), sample1D(threadID));
 		vec3 forkToLight = lightVertex - forkVertex.vertex;
 		float distanceToLight = length(forkToLight);
-		if (distanceToLight > RenderingSettings::epsilon) {
+		if (distanceToLight > Constants::epsilon) {
 
 			//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
 			float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
@@ -3630,7 +3630,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 									break;
 								}
 
-								previousPerturbedVertex = forkVertex.vertex + RenderingSettings::epsilon * forkVertex.surfaceNormal;
+								previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
 							}
 
 							//visibility check:
@@ -3658,7 +3658,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 								//visibility check: first potential normal culling:
 								if (scene->lightSource->validHitDirection(lastSegmentDir)) {
 									if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
-										previousPerturbedVertex = forkVertex.vertex + RenderingSettings::epsilon * forkVertex.surfaceNormal;
+										previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
 									}
 
 									//occlusion check:
@@ -3709,7 +3709,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 
 /**
 * Calculates the measurement contribution as well as the path tracing PDF of the given path.
-* On top of that, the PDFs of all MVNEE estimators are calculated. THIS IS AN OPTIMIZED VERSION (see "pathTracing_MVNEE_ConstantAlpha"):
+* On top of that, the PDFs of all MVNEE estimators are calculated. THIS IS AN OPTIMIZED VERSION (see "pathTracing_MVNEE_ConstantsAlpha"):
 * many unnecessary loop iterations are avoided, further small tweaks are used in order to speed up execution. A lot of pdf and measurement contrib
 * calcualtion steps can be avoided, as those are calcualted whilst sampling the path.
 *
@@ -3727,7 +3727,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 * @param currentColorThroughput:  color threoughput of the path from start to the vertex at "estimatorIndex"
 * @return: the MIS weighted contribution of the path
 */
-vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, const int estimatorIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput)
+vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, const int estimatorIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput)
 {
 	const int segmentCount = path->getSegmentLength();
 	assert(path->getVertexCount() >= 2);
@@ -3943,7 +3943,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 				for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
 					vec3 perturbedVertex = path->getVertexPosition(e + 1 + s);
 
-					double finalGGXAlpha = sigmaForHG * MediumParameters::GGX_CONVERSION_CONSTANT; //multiply with constant for conversion from gauss to ggx
+					double finalGGXAlpha = sigmaForHG * Constants::GGX_CONVERSION_Constants; //multiply with Constants for conversion from gauss to ggx
 
 					//update pdfs:
 					vec3 seedToPerturbed = perturbedVertex - tl_seedVertices[s];
@@ -4219,7 +4219,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 				for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
 					vec3 perturbedVertex = path->getVertexPosition(e + 1 + s);
 					
-					double finalGGXAlpha = sigmaForHG * 1.637618734; //multiply with constant for conversion from gauss to ggx
+					double finalGGXAlpha = sigmaForHG * 1.637618734; //multiply with Constants for conversion from gauss to ggx
 
 					//update pdfs:
 					vec3 seedToPerturbed = perturbedVertex - tl_seedVertices[s];
@@ -4307,7 +4307,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 * Further a lot of path tracing pdf and measurement contrib calcualtions are avoided by acumulating pdf and measurement contrib whilst
 * sampling the path.
 */
- vec3 VolumeRenderer::pathTracing_MVNEE_ConstantAlpha(const vec3& rayOrigin, const vec3& rayDir)
+ vec3 VolumeRenderer::pathTracing_MVNEE_ConstantsAlpha(const vec3& rayOrigin, const vec3& rayDir)
  {
 	 //get thread local pre-reservers data for this thread:
 	 int threadID = omp_get_thread_num();
@@ -4358,7 +4358,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 		 RTCRay ray;
 		 vec3 intersectionNormal;
 		 if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal) && ray.tfar <= freePathLength) {
-			 if (ray.tfar > RenderingSettings::epsilon) {
+			 if (ray.tfar > Constants::epsilon) {
 
 				 //////////////////////////////
 				 // Surface interaction
@@ -4389,7 +4389,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 						 //estimator Index for Path tracing is 0!
 						 vec3 finalContribution;
 						 if (pathTracingPath->getSegmentLength() > 1) {
-							 finalContribution = calcFinalWeightedContribution_ConstantAlpha(pathTracingPath, 0, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
+							 finalContribution = calcFinalWeightedContribution_ConstantsAlpha(pathTracingPath, 0, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
 						 }
 						 else {
 							 finalContribution = scene->lightSource->Le;
@@ -4431,7 +4431,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 				 newColorThroughput = colorThroughput * evalDiffuseBRDF(surfaceData.albedo);
 
 				 //update variables:
-				 currPosition = surfaceVertex + RenderingSettings::epsilon * intersectionNormal;
+				 currPosition = surfaceVertex + Constants::epsilon * intersectionNormal;
 				 currDir = newDir;
 			 }
 			 else {
@@ -4490,7 +4490,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 		 vec3 lightVertex = scene->lightSource->sampleLightPosition(sample1D(threadID), sample1D(threadID));
 		 vec3 forkToLight = lightVertex - forkVertex.vertex;
 		 float distanceToLight = length(forkToLight);
-		 if (distanceToLight > RenderingSettings::epsilon) {
+		 if (distanceToLight > Constants::epsilon) {
 
 			 //only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
 			 float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
@@ -4554,7 +4554,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 								 break;
 							 }
 
-							 double finalGGXAlpha = sigmaForHG * MediumParameters::GGX_CONVERSION_CONSTANT; //conversion with constant factor
+							 double finalGGXAlpha = sigmaForHG * Constants::GGX_CONVERSION_Constants; //conversion with Constants factor
 
 							 //perform perturbation using ggx radius and uniform angle in u,v plane 
 							 perturbVertexGGX2D(finalGGXAlpha, u, v, seedVertex, &perturbedVertex, threadID);
@@ -4576,7 +4576,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 									 break;
 								 }
 
-								 previousPerturbedVertex = forkVertex.vertex + RenderingSettings::epsilon * forkVertex.surfaceNormal;
+								 previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
 							 }
 
 							 //visibility check:
@@ -4605,7 +4605,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 								 if (scene->lightSource->validHitDirection(lastSegmentDir)) {
 
 									 if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
-										 previousPerturbedVertex = forkVertex.vertex + RenderingSettings::epsilon * forkVertex.surfaceNormal;
+										 previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
 									 }
 
 									 //occlusion check:
@@ -4617,7 +4617,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 										 //calculate measurement constribution, pdf and mis weight:
 										 //estimator Index for MVNEE is index of last path tracing vertex
 										 //make sure the last path tracing vertex index is set correctly in order to use the correct PDF
-										 vec3 finalContribution = calcFinalWeightedContribution_ConstantAlpha(pathTracingPath, lastPathTracingVertexIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
+										 vec3 finalContribution = calcFinalWeightedContribution_ConstantsAlpha(pathTracingPath, lastPathTracingVertexIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
 										 finalPixel += finalContribution;
 									 }
 								 }
@@ -4690,7 +4690,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 		 RTCRay ray;
 		 vec3 intersectionNormal;
 		 if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal) && ray.tfar <= freePathLength) {
-			 if (ray.tfar > RenderingSettings::epsilon) {
+			 if (ray.tfar > Constants::epsilon) {
 
 				 //////////////////////////////
 				 // Surface interaction
@@ -4720,7 +4720,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 						 successfullyCreatedPaths[threadID]++;
 						 vec3 finalContribution;
 						 if (pathTracingPath->getSegmentLength() > 1) {
-							 finalContribution = calcFinalWeightedContribution_ConstantAlpha(pathTracingPath, 0, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
+							 finalContribution = calcFinalWeightedContribution_ConstantsAlpha(pathTracingPath, 0, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
 						 }
 						 else {
 							 finalContribution = scene->lightSource->Le;
@@ -4762,7 +4762,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 				 newColorThroughput *= colorThroughput * evalDiffuseBRDF(surfaceData.albedo);
 
 				 //update variables:
-				 currPosition = surfaceVertex + RenderingSettings::epsilon * intersectionNormal;
+				 currPosition = surfaceVertex + Constants::epsilon * intersectionNormal;
 				 currDir = newDir;
 			 }
 			 else {
@@ -4821,7 +4821,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 		 vec3 lightVertex = scene->lightSource->sampleLightPosition(sample1D(threadID), sample1D(threadID));
 		 vec3 forkToLight = lightVertex - forkVertex.vertex;
 		 float distanceToLight = length(forkToLight);
-		 if (distanceToLight > RenderingSettings::epsilon) {
+		 if (distanceToLight > Constants::epsilon) {
 			 //only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
 			 float expectedSegments = distanceToLight / MediumParameters::meanFreePathF;
 			 if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= RenderingSettings::MAX_MVNEE_SEGMENTS_F) {
@@ -4887,7 +4887,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 								 break;
 							 }
 
-							 double finalGGXAlpha = sigmaForHG * 1.637618734; //constant value: conversion with constant factor
+							 double finalGGXAlpha = sigmaForHG * 1.637618734; //Constants value: conversion with Constants factor
 
 							 //perform perturbation using ggx radius and uniform angle in u,v plane 
 							 perturbVertexGGX2D(finalGGXAlpha, u, v, seedVertex, &perturbedVertex, threadID);
@@ -4910,7 +4910,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 									 validMVNEEPath = false;
 									 break;
 								 }
-								 previousPerturbedVertex = forkVertex.vertex + RenderingSettings::epsilon * forkVertex.surfaceNormal;
+								 previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
 							 }
 
 							 //visibility check:
@@ -4939,7 +4939,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 								 if (scene->lightSource->validHitDirection(lastSegmentDir)) {
 
 									 if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
-										 previousPerturbedVertex = forkVertex.vertex + RenderingSettings::epsilon * forkVertex.surfaceNormal;
+										 previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
 									 }
 
 									 //occlusion check:
@@ -4952,7 +4952,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantAlpha(Path* path, con
 										 //estimator Index for MVNEE is index of last path tracing vertex
 										 //make sure the last path tracing vertex index is set correctly in order to use the correct PDF
 										 successfullyCreatedPaths[threadID]++;
-										 vec3 finalContribution = calcFinalWeightedContribution_ConstantAlpha(pathTracingPath, lastPathTracingVertexIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
+										 vec3 finalContribution = calcFinalWeightedContribution_ConstantsAlpha(pathTracingPath, lastPathTracingVertexIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
 										 finalPixel += finalContribution;
 									 }
 									 else {
@@ -5230,7 +5230,7 @@ void VolumeRenderer::printRenderingParameters(int sampleCount, double duration)
 		case PATH_TRACING_MVNEE_OPTIMIZED2: o << "Path Tracing with MVNEE and MIS in homogeneous medium - Optimized2 second version" << endl; break;
 		case PATH_TRACING_MVNEE_OPTIMIZED3: o << "Path Tracing with MVNEE and MIS in homogeneous medium - Optimized3 third version" << endl; break;*/
 		case PATH_TRACING_MVNEE_GAUSS_PERTURB: o << "Path Tracing with MVNEE and MIS in homogeneous medium - Gauss perturbation!" << endl; break;
-		case PATH_TRACING_MVNEE_CONSTANT_ALPHA: o << "Path Tracing with MVNEE and MIS in homogeneous medium - GGX perturbation with CONSTANT ALPHA!" << endl; break;
+		case PATH_TRACING_MVNEE_Constants_ALPHA: o << "Path Tracing with MVNEE and MIS in homogeneous medium - GGX perturbation with Constants ALPHA!" << endl; break;
 		default: o << "DEFAULT: Integrator unknown!" << endl; break;
 	}
 	o << endl;
