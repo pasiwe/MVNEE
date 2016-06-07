@@ -55,16 +55,16 @@ public:
 	Scene(RTCScene scene) : scene(scene) {
 		
 		//initialize camera, light and set light geometry in embree scene
-		camera.cameraOrigin = CameraSettings::cameraOrigin;
-		camera.camLookAt = CameraSettings::camLookAt;
-		camera.camRight = CameraSettings::camRight;
-		camera.camUp = CameraSettings::camUp;
-		camera.distanceToImagePlane = CameraSettings::distanceToImagePlane;
-		camera.imagePlaneHeight = CameraSettings::imagePlaneHeight;
-		camera.imagePlaneWidth = CameraSettings::imagePlaneWidth;		
+		//camera.cameraOrigin = CameraSettings::cameraOrigin;
+		//camera.camLookAt = CameraSettings::camLookAt;
+		//camera.camRight = CameraSettings::camRight;
+		//camera.camUp = CameraSettings::camUp;
+		//camera.distanceToImagePlane = CameraSettings::distanceToImagePlane;
+		//camera.imagePlaneHeight = CameraSettings::imagePlaneHeight;
+		//camera.imagePlaneWidth = CameraSettings::imagePlaneWidth;		
 
-		LightDisk* lightDisk = new LightDisk(LightSettings::lightCenter, LightSettings::lightNormal, LightSettings::lightU, LightSettings::lightV, LightSettings::lightColor, LightSettings::lightBrightness, LightSettings::lightRadius);
-		lightSource = lightDisk;
+		//LightDisk* lightDisk = new LightDisk(LightSettings::lightCenter, LightSettings::lightNormal, LightSettings::lightU, LightSettings::lightV, LightSettings::lightColor, LightSettings::lightBrightness, LightSettings::lightRadius);
+		//lightSource = lightDisk;
 
 		//add light geometry to embree scene:
 		int objectID = addCircularPlane(LightSettings::lightCenter, LightSettings::lightNormal, LightSettings::lightU, LightSettings::lightV, LightSettings::lightRadius, 100, "light", LightSettings::lightColor);
@@ -452,22 +452,54 @@ public:
 		doc.parse<0>(xmlFile.data());
 
 		//read the data:
-		xml_node<> *sceneNode = doc.first_node("scene");
-		xml_attribute<> *version =  sceneNode->first_attribute("version");
+		xml_node<>* sceneNode = doc.first_node("scene");
+		xml_attribute<>* version =  sceneNode->first_attribute("version");
 		string v = version->value();
 		cout << "Scene: version " << v << endl;
 		if (v == "1.0.0") {
 
 			//Integrator
-			xml_node<> *integratorNode = sceneNode->first_node("integrator");
-			xml_attribute<> *integratorType = integratorNode->first_attribute("type");
+			xml_node<>* integratorNode = sceneNode->first_node("integrator");
+			xml_attribute<>* integratorType = integratorNode->first_attribute("type");
 			string integrator = integratorType->value();
+			string sessionName;
+			int width, height, samples, threadCount, MESC, maxSegments;
+
+			for (xml_node<>* intSubNode = integratorNode->first_node(); intSubNode; intSubNode = intSubNode->next_sibling()) {
+				string currName = intSubNode->name();
+				if (currName == "output") {
+					sessionName = intSubNode->first_attribute("sessionName")->value();
+					StringParser widthS = intSubNode->first_attribute("width")->value();
+					width = widthS.getIntParam("");
+					StringParser heightS = intSubNode->first_attribute("height")->value();
+					height = heightS.getIntParam("");
+				}
+				else if (currName == "samples") {
+					StringParser samplesS = intSubNode->first_attribute("spp")->value();
+					samples = samplesS.getIntParam("");
+				}
+				else if (currName == "maxPathSegments") {
+					StringParser string = intSubNode->first_attribute("value")->value();
+					maxSegments = string.getIntParam("");
+				}
+				else if (currName == "MESC") {
+					StringParser string = intSubNode->first_attribute("value")->value();
+					MESC = string.getIntParam("");
+				}
+				else if (currName == "threads") {
+					StringParser string = intSubNode->first_attribute("count")->value();
+					threadCount = string.getIntParam("");
+				}
+				else {
+					cout << "invalid integrator param! " << currName << endl;
+				}
+			}
 
 			//Camera
-			xml_node<> *cameraNode = sceneNode->first_node("camera");
-			for (xml_node<> * camSubNode = cameraNode->first_node(); camSubNode; camSubNode = camSubNode->next_sibling()) {
+			xml_node<>* cameraNode = sceneNode->first_node("camera");
+			for (xml_node<>* camSubNode = cameraNode->first_node(); camSubNode; camSubNode = camSubNode->next_sibling()) {
 				string currName = camSubNode->name();
-				xml_attribute<> *camAttr = camSubNode->first_attribute();
+				xml_attribute<>* camAttr = camSubNode->first_attribute();
 				string camValue = camAttr->value();
 				if (currName == "distanceToImagePlane") {
 					camera.distanceToImagePlane = (float)atof(camValue.data());
@@ -494,29 +526,115 @@ public:
 					camera.camUp = up;
 					camera.camRight = right;
 				}
+				else {
+					cout << "invalid camera param! " << currName << endl;
+				}
 			}
 
 			//Lightsource
-			xml_node<> *lightNode = sceneNode->first_node("lightsource");
-			for (xml_node<> * lightSubNode = lightNode->first_node(); lightSubNode; lightSubNode = lightSubNode->next_sibling()) {
+			xml_node<>* lightNode = sceneNode->first_node("lightsource");
+			vec3 lightCenter, lightNormal, lightU, lightV, lightColor;
+			float lightBrightness, lightRadius;
 
+			for (xml_node<>* lightSubNode = lightNode->first_node(); lightSubNode; lightSubNode = lightSubNode->next_sibling()) {
+				string currName = lightSubNode->name();
+
+				if (currName == "position") {
+					xml_attribute<>* posAttr = lightSubNode->first_attribute("center");
+					StringParser posString = posAttr->value();
+					lightCenter = posString.getVec3Param("");
+
+					posAttr = lightSubNode->first_attribute("normal");
+					StringParser normalString = posAttr->value();
+
+					lightNormal = normalString.getVec3Param("");
+
+					//create tangent frame from normal direction for u,v directions:
+					coordinateSystem(lightNormal, lightU, lightV);
+				}
+				else if (currName == "radius") {
+					xml_attribute<>* radAttr = lightSubNode->first_attribute("value");
+					lightRadius = (float)atof(radAttr->value());
+				}
+				else if (currName == "brightness") {
+					xml_attribute<>* brightAttr = lightSubNode->first_attribute("value");
+					lightBrightness = (float)atof(brightAttr->value());
+				}
+				else if (currName == "color") {
+					xml_attribute<>* colorAttr = lightSubNode->first_attribute("value");
+					StringParser colorString = colorAttr->value();
+					lightColor = colorString.getVec3Param("");
+				}
+				else {
+					cout << "invalid light param! " << currName << endl;
+				}
 			}
+					
+			lightSource = new LightDisk(lightCenter, lightNormal, lightU, lightV, lightColor, lightBrightness, lightRadius);
 
 			//MediumSettings
+			xml_node<>* mediumNode = sceneNode->first_node("medium");
+			xml_node<>* coefficientSubNode = mediumNode->first_node("coefficients");
+			string mu_s_str = coefficientSubNode->first_attribute("mu_s")->value();
+			string mu_a_str = coefficientSubNode->first_attribute("mu_a")->value();
+
+			double mu_s = atof(mu_s_str.data());
+			double mu_a = atof(mu_a_str.data());
+			double mu_t = mu_s + mu_a;
+
+			double meanFreePath = 1.0 / mu_t;
+			float meanFreePathF = (float)meanFreePath;
+
+			xml_node<>* phaseFunctionSubNode = mediumNode->first_node("phaseFunction");
+			string g_str = phaseFunctionSubNode->first_attribute("g")->value();
+			double g = atof(g_str.data());
+			float gF = (float)g;
 
 			//Models/Objects
+			cout << "adding models to the scene..." << endl;
+
+			for (xml_node<>* objectNode = sceneNode->first_node("model"); objectNode; objectNode = objectNode->next_sibling("model")) {
+				string name = objectNode->first_attribute("name")->value();
+				string modelType = objectNode->first_attribute("type")->value();
+				unsigned int objID = RTC_INVALID_GEOMETRY_ID;
+
+				if (modelType == "obj") {
+					string objFilePath = objectNode->first_node("filename")->first_attribute("value")->value();
+					StringParser translationS = objectNode->first_node("transform")->first_attribute("translate")->value();
+					vec3 translation = translationS.getVec3Param("");
+					StringParser scaleS = objectNode->first_node("transform")->first_attribute("scale")->value();
+					float scale = scaleS.getFloatParam("");
+					StringParser colorS = objectNode->first_node("material")->first_attribute("albedo")->value();
+					vec3 albedo = colorS.getVec3Param("");
+
+					objID = addObject(objFilePath, name, albedo, translation, scale);					
+				}
+				else if (modelType == "plane") {
+					StringParser translationS = objectNode->first_node("transform")->first_attribute("translate")->value();
+					float yTransl = translationS.getFloatParam("");
+					StringParser scaleS = objectNode->first_node("transform")->first_attribute("scale")->value();
+					float scale = scaleS.getFloatParam("");
+					StringParser colorS = objectNode->first_node("material")->first_attribute("albedo")->value();
+					vec3 albedo = colorS.getVec3Param("");
+
+					addGroundPlane(name, albedo, scale, yTransl);
+				}
+				else {
+					cout << "invalid model type!" << modelType << endl;
+				}
+
+				if (objID == RTC_INVALID_GEOMETRY_ID) {
+					cout << "invalid model: object file path incorrect?" << endl;
+					return false;
+				}
+				
+			}
 		}
 		else {
 			return false;
 		}
 
-		//for (xml_attribute<> *attr = sceneNode->first_attribute();
-		//	attr; attr = attr->next_attribute())
-		//{
-		//	cout << "Node foobar has attribute " << attr->name() << " ";
-		//	cout << "with value " << attr->value() << "\n";
-		//}
-
+		cout << "scene xml file successfully parsed." << endl;
 		return true;
 	}
 
