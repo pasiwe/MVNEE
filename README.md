@@ -59,3 +59,9 @@ The entire code is written in C++ 11, all libraries are only provided in 64 bit 
 	Error cases:
 		In cases of errors, try compiling Embree for your own operating system and include it for compilation.
 		The code is very simple, so you should be able to cater it to your own needs.
+		
+	Running the VolumeRenderer:
+		In order to run the Renderering Process, simply start the compiled executable. This will load the default scene configuration.
+		Other scene files can be used by setting the scene file path as the run time argument. Example on linux:
+		
+		./volumerenderer ../setups/myScene.xml

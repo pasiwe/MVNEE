@@ -54,20 +54,6 @@ public:
 
 	Scene(RTCScene scene) : scene(scene) {
 		
-		//initialize camera, light and set light geometry in embree scene
-		//camera.cameraOrigin = CameraSettings::cameraOrigin;
-		//camera.camLookAt = CameraSettings::camLookAt;
-		//camera.camRight = CameraSettings::camRight;
-		//camera.camUp = CameraSettings::camUp;
-		//camera.distanceToImagePlane = CameraSettings::distanceToImagePlane;
-		//camera.imagePlaneHeight = CameraSettings::imagePlaneHeight;
-		//camera.imagePlaneWidth = CameraSettings::imagePlaneWidth;		
-
-		//LightDisk* lightDisk = new LightDisk(LightSettings::lightCenter, LightSettings::lightNormal, LightSettings::lightU, LightSettings::lightV, LightSettings::lightColor, LightSettings::lightBrightness, LightSettings::lightRadius);
-		//lightSource = lightDisk;
-
-		//add light geometry to embree scene:
-		//int objectID = addCircularPlane(LightSettings::lightCenter, LightSettings::lightNormal, LightSettings::lightU, LightSettings::lightV, LightSettings::lightRadius, 100, "light", LightSettings::lightColor);
 	}
 
 	~Scene() {
@@ -437,6 +423,7 @@ public:
 		ifstream file;
 		file.open(settingsFilePath, ios::in); // opens as ASCII!
 		if (!file) {
+			cout << "invalid scene file path: " << settingsFilePath << endl;
 			return false;
 		}
 		file.close();
@@ -445,6 +432,7 @@ public:
 		rapidxml::file<> xmlFile(settingsFilePath.c_str());
 
 		if (xmlFile.size() <= 0) {
+			cout << "invalid scene file: " << endl;
 			return false;
 		}
 
@@ -704,6 +692,7 @@ public:
 			}
 		}
 		else {
+			cout << "incorrect scene file version!: " << v << endl;
 			return false;
 		}
 
