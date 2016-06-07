@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<scene version="1.0.0">
+	<integrator type="PATH_TRACING_MVNEE_FINAL"> 
+	<!-- <integrator type="PATH_TRACING_NEE_MIS_NO_SCATTERING"> -->
+		<output sessionName="cornellbox" width="512" height="512"/>
+		<samples spp="800"/>
+		<!-- Stopping criteria for all paths: max path length -->
+		<maxPathSegments value="30"/>
+		<!-- Maximum expected segment count for MVNEE -->
+		<MESC value="4"/>
+		<!-- Specify maximum thread count! -->
+		<threads count="8"/>
+	</integrator>
+
+	<camera type="perspective">		
+		<distanceToImagePlane value="1.0"/>
+		<imagePlaneWidth value="1.0"/>
+		<imagePlaneHeight value="1.0"/>
+		<lookAt origin="2.78 2.73 -5.00" target="2.78 2.73 7.00" up="0 1 0"/>
+	</camera>
+	
+	<lightsource type="lightdisk">
+		<position center="2.78 5.4879999 2.79" normal="0 -1 0"/>
+		<radius value="0.5"/>
+		<brightness value="60.0"/>
+		<color value="1.0 1.0 1.0"/>
+	</lightsource>
+	
+	<medium type="homogeneous">		
+		<coefficients mu_s="0.2" mu_a="0.0"/>
+		<phaseFunction type="Henyey-Greenstein" g="0.8"/>
+	</medium>
+
+	<model type="obj" name="cbox_back">
+		<filename value="../models/cornellbox/cbox_back.obj"/>		
+		<transform translate="0 0 0" scale="0.01" flipZ="false" flipVertexOrder="true"/>
+		<!-- Albedo for diffuse Lambertian BRDF -->
+		<material albedo="1 1 1"/>
+	</model>
+	
+	<model type="obj" name="cbox_ceiling">
+		<filename value="../models/cornellbox/cbox_ceiling.obj"/>		
+		<transform translate="0 0 0" scale="0.01" flipZ="false" flipVertexOrder="true"/>
+		<!-- Albedo for diffuse Lambertian BRDF -->
+		<material albedo="1 1 1"/>
+	</model>
+	
+	<model type="obj" name="cbox_floor">
+		<filename value="../models/cornellbox/cbox_floor.obj"/>		
+		<transform translate="0 0 0" scale="0.01" flipZ="false" flipVertexOrder="true"/>
+		<!-- Albedo for diffuse Lambertian BRDF -->
+		<material albedo="1 1 1"/>
+	</model>
+	
+	<model type="obj" name="cbox_greenwall">
+		<filename value="../models/cornellbox/cbox_greenwall.obj"/>		
+		<transform translate="0 0 0" scale="0.01" flipZ="false" flipVertexOrder="true"/>
+		<!-- Albedo for diffuse Lambertian BRDF -->
+		<material albedo="0 1 0"/>
+	</model>
+	
+	<model type="obj" name="cbox_redwall">
+		<filename value="../models/cornellbox/cbox_redwall.obj"/>		
+		<transform translate="0 0 0" scale="0.01" flipZ="false" flipVertexOrder="true"/>
+		<!-- Albedo for diffuse Lambertian BRDF -->
+		<material albedo="1 0 0"/>
+	</model>
+	
+	<model type="obj" name="cbox_largebox">
+		<filename value="../models/cornellbox/cbox_largebox.obj"/>		
+		<transform translate="0 0 0" scale="0.01" flipZ="false" flipVertexOrder="true"/>
+		<!-- Albedo for diffuse Lambertian BRDF -->
+		<material albedo="1 1 1"/>
+	</model>
+	
+	<model type="obj" name="cbox_smallbox">
+		<filename value="../models/cornellbox/cbox_smallbox.obj"/>		
+		<transform translate="0 0 0" scale="0.01" flipZ="false" flipVertexOrder="true"/>
+		<!-- Albedo for diffuse Lambertian BRDF -->
+		<material albedo="1 1 1"/>
+	</model>
+	
+	
+</scene>

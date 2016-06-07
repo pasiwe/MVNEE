@@ -195,7 +195,7 @@ public:
 	* Adds the geometry of the specified obj. file to the scene.
 	* Returns the Embree geometry ID;
 	*/
-	unsigned int addObject(const string& objFilePath, const string& name, const vec3& albedo, const vec3& translationVector, const float& scaling) {
+	unsigned int addObject(const string& objFilePath, const string& name, const vec3& albedo, const vec3& translationVector, const float& scaling, const bool& flipZAxis, const bool& flipVertexOrder) {
 
 		cout << "Object: " << name;
 
@@ -222,9 +222,15 @@ public:
 				}
 				else if (line.startsWith("v ")) {
 					vec3 v = line.getVec3Param("v");
-					vec3 vAdjusted = vec3(v.x, v.y, -v.z);
-					vec3 transformedVec = (vAdjusted * scaling) + translationVector;
-					vertices.push_back(transformedVec);
+					if (flipZAxis) {
+						vec3 vAdjusted = vec3(v.x, v.y, -v.z);
+						vec3 transformedVec = (vAdjusted * scaling) + translationVector;
+						vertices.push_back(transformedVec);
+					}
+					else {
+						vec3 transformedVec = (v * scaling) + translationVector;
+						vertices.push_back(transformedVec);
+					}
 				}
 				else if (line.startsWith("f")) {
 
@@ -235,26 +241,64 @@ public:
 
 					int faceVertexCount = (int)faceList.size();
 					//only triangels allowed for now!;
-					assert(faceVertexCount == 3);
+					//assert(faceVertexCount == 3);
 
-					Triangle currentFace;
+					if (faceVertexCount == 3) {
 
-					vector<StringParser> perVertexIndices;
-					faceList.at(0).split('/', &perVertexIndices);
-					int v0 = atoi(perVertexIndices[0].getCharacterData());
-					currentFace.v0 = v0 - 1;
+						Triangle currentFace;
 
-					vector<StringParser> perVertexIndices2;
-					faceList.at(1).split('/', &perVertexIndices2);
-					int v1 = atoi(perVertexIndices2[0].getCharacterData());
-					currentFace.v1 = v1 - 1;
+						vector<StringParser> perVertexIndices;
+						faceList.at(0).split('/', &perVertexIndices);
+						int v0 = atoi(perVertexIndices[0].getCharacterData());						
 
-					vector<StringParser> perVertexIndices3;
-					faceList.at(2).split('/', &perVertexIndices3);
-					int v2 = atoi(perVertexIndices3[0].getCharacterData());
-					currentFace.v2 = v2 - 1;
+						vector<StringParser> perVertexIndices2;
+						faceList.at(1).split('/', &perVertexIndices2);
+						int v1 = atoi(perVertexIndices2[0].getCharacterData());						
 
-					faces.push_back(currentFace);
+						vector<StringParser> perVertexIndices3;
+						faceList.at(2).split('/', &perVertexIndices3);
+						int v2 = atoi(perVertexIndices3[0].getCharacterData());
+						
+
+						if (flipVertexOrder) {
+							currentFace.v0 = v0 - 1;
+							currentFace.v1 = v2 - 1;
+							currentFace.v2 = v1 - 1;
+						}
+						else {
+							currentFace.v0 = v0 - 1;
+							currentFace.v1 = v1 - 1;
+							currentFace.v2 = v2 - 1;
+						}
+
+						faces.push_back(currentFace);
+					}
+					else if (faceVertexCount > 3) {
+						vector<int> faceIndices(faceVertexCount);
+						for (int i = 0; i < faceVertexCount; i++) {
+							vector<StringParser> perVertexIndices;
+							faceList.at(i).split('/', &perVertexIndices);
+							int v = atoi(perVertexIndices[0].getCharacterData()) - 1;
+
+							faceIndices[i] = v;
+						}
+
+						//create triangles
+						for (int i = 1; i < (faceVertexCount - 1); i++) {
+							Triangle currentFace;
+							if (flipVertexOrder) {
+								currentFace.v0 = faceIndices[0];
+								currentFace.v1 = faceIndices[i + 1];
+								currentFace.v2 = faceIndices[i];
+							}
+							else {
+								currentFace.v0 = faceIndices[0];
+								currentFace.v1 = faceIndices[i];
+								currentFace.v2 = faceIndices[i + 1];
+							}
+							faces.push_back(currentFace);
+						}
+					}
 				}
 			}
 		}
@@ -665,10 +709,22 @@ public:
 					vec3 translation = translationS.getVec3Param("");
 					StringParser scaleS = objectNode->first_node("transform")->first_attribute("scale")->value();
 					float scale = scaleS.getFloatParam("");
+					string flipZS = objectNode->first_node("transform")->first_attribute("flipZ")->value();
+					bool flipZ = true;
+					if (flipZS == "false") {
+						flipZ = false;
+					}
+
+					string flipVertexOrderS = objectNode->first_node("transform")->first_attribute("flipVertexOrder")->value();
+					bool flipVertexOrder = false;
+					if (flipVertexOrderS == "true") {
+						flipVertexOrder = true;
+					}
+
 					StringParser colorS = objectNode->first_node("material")->first_attribute("albedo")->value();
 					vec3 albedo = colorS.getVec3Param("");
 
-					objID = addObject(objFilePath, name, albedo, translation, scale);					
+					objID = addObject(objFilePath, name, albedo, translation, scale, flipZ, flipVertexOrder);
 				}
 				else if (modelType == "plane") {
 					StringParser translationS = objectNode->first_node("transform")->first_attribute("y")->value();
