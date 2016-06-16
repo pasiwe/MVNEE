@@ -503,9 +503,9 @@ public:
 				string currName = intSubNode->name();
 				if (currName == "output") {
 					sessionName = intSubNode->first_attribute("sessionName")->value();
-					StringParser widthS = intSubNode->first_attribute("width")->value();
+					StringParser widthS = StringParser(intSubNode->first_attribute("width")->value());
 					width = widthS.getIntParam("");
-					StringParser heightS = intSubNode->first_attribute("height")->value();
+					StringParser heightS = StringParser(intSubNode->first_attribute("height")->value());
 					height = heightS.getIntParam("");
 					if (width < 1 || height < 1) {
 						cout << "invalid resolution! " << width << ", " << height << endl;
@@ -513,7 +513,7 @@ public:
 					}
 				}
 				else if (currName == "samples") {
-					StringParser samplesS = intSubNode->first_attribute("spp")->value();
+					StringParser samplesS = StringParser(intSubNode->first_attribute("spp")->value());
 					samples = samplesS.getIntParam("");
 					if (samples < 1) {
 						cout << "invalid samples!" << samples << ", value has to be > 0!" << endl;
@@ -521,7 +521,7 @@ public:
 					}
 				}
 				else if (currName == "maxPathSegments") {
-					StringParser string = intSubNode->first_attribute("value")->value();
+					StringParser string = StringParser(intSubNode->first_attribute("value")->value());
 					maxSegments = string.getIntParam("");
 					if (maxSegments < 1) {
 						cout << "invalid maxSegments!" << maxSegments << ", value has to be > 0!" << endl;
@@ -529,7 +529,7 @@ public:
 					}
 				}
 				else if (currName == "MESC") {
-					StringParser string = intSubNode->first_attribute("value")->value();
+					StringParser string = StringParser(intSubNode->first_attribute("value")->value());
 					MESC = string.getIntParam("");
 					if (MESC < 1) {
 						cout << "invalid MESC!" << MESC << ", value has to be > 0!" << endl;
@@ -537,7 +537,7 @@ public:
 					}
 				}
 				else if (currName == "threads") {
-					StringParser string = intSubNode->first_attribute("count")->value();
+					StringParser string = StringParser(intSubNode->first_attribute("count")->value());
 					threadCount = string.getIntParam("");
 					if (threadCount == 1) {
 						renderParallel = false;
@@ -607,9 +607,9 @@ public:
 					camera.imagePlaneHeight = (float)atof(camValue.data());
 				}
 				else if (currName == "lookAt") {
-					StringParser originS = camSubNode->first_attribute("origin")->value();
-					StringParser targetS = camSubNode->first_attribute("target")->value();
-					StringParser upS = camSubNode->first_attribute("up")->value();
+					StringParser originS = StringParser(camSubNode->first_attribute("origin")->value());
+					StringParser targetS = StringParser(camSubNode->first_attribute("target")->value());
+					StringParser upS = StringParser(camSubNode->first_attribute("up")->value());
 
 					vec3 origin = originS.getVec3Param("");
 					vec3 target = targetS.getVec3Param("");
@@ -637,11 +637,11 @@ public:
 
 				if (currName == "position") {
 					xml_attribute<>* posAttr = lightSubNode->first_attribute("center");
-					StringParser posString = posAttr->value();
+					StringParser posString = StringParser(posAttr->value());
 					lightCenter = posString.getVec3Param("");
 
 					posAttr = lightSubNode->first_attribute("normal");
-					StringParser normalString = posAttr->value();
+					StringParser normalString = StringParser(posAttr->value());
 
 					lightNormal = normalString.getVec3Param("");
 
@@ -658,7 +658,7 @@ public:
 				}
 				else if (currName == "color") {
 					xml_attribute<>* colorAttr = lightSubNode->first_attribute("value");
-					StringParser colorString = colorAttr->value();
+					StringParser colorString = StringParser(colorAttr->value());
 					lightColor = colorString.getVec3Param("");
 				}
 				else {
@@ -706,9 +706,9 @@ public:
 
 				if (modelType == "obj") {
 					string objFilePath = objectNode->first_node("filename")->first_attribute("value")->value();
-					StringParser translationS = objectNode->first_node("transform")->first_attribute("translate")->value();
+					StringParser translationS = StringParser(objectNode->first_node("transform")->first_attribute("translate")->value());
 					vec3 translation = translationS.getVec3Param("");
-					StringParser scaleS = objectNode->first_node("transform")->first_attribute("scale")->value();
+					StringParser scaleS = StringParser(objectNode->first_node("transform")->first_attribute("scale")->value());
 					float scale = scaleS.getFloatParam("");
 					string flipZS = objectNode->first_node("transform")->first_attribute("flipZ")->value();
 					bool flipZ = true;
@@ -722,17 +722,17 @@ public:
 						flipVertexOrder = true;
 					}
 
-					StringParser colorS = objectNode->first_node("material")->first_attribute("albedo")->value();
+					StringParser colorS = StringParser(objectNode->first_node("material")->first_attribute("albedo")->value());
 					vec3 albedo = colorS.getVec3Param("");
 
 					objID = addObject(objFilePath, name, albedo, translation, scale, flipZ, flipVertexOrder);
 				}
 				else if (modelType == "plane") {
-					StringParser translationS = objectNode->first_node("transform")->first_attribute("y")->value();
+					StringParser translationS = StringParser(objectNode->first_node("transform")->first_attribute("y")->value());
 					float yTransl = translationS.getFloatParam("");
-					StringParser scaleS = objectNode->first_node("transform")->first_attribute("scale")->value();
+					StringParser scaleS = StringParser(objectNode->first_node("transform")->first_attribute("scale")->value());
 					float scale = scaleS.getFloatParam("");
-					StringParser colorS = objectNode->first_node("material")->first_attribute("albedo")->value();
+					StringParser colorS = StringParser(objectNode->first_node("material")->first_attribute("albedo")->value());
 					vec3 albedo = colorS.getVec3Param("");
 
 					objID = addGroundPlane(name, albedo, scale, yTransl);
