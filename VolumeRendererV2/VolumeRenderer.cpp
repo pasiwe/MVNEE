@@ -2286,6 +2286,8 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 							//perform perturbation using ggx radius and uniform angle in u,v plane 
 							perturbVertexGGX2D(finalGGXAlpha, u, v, seedVertex, &perturbedVertex, threadID);
 
+							float maxT = tl_seedSegmentLengths[p];
+
 							//for first perturbed vertex, check if perturbation violates the normal culling condition on the surface!
 							if (p == 0 && forkVertex.vertexType == TYPE_SURFACE) {
 								vec3 forkToFirstPerturbed = perturbedVertex - forkVertex.vertex;
@@ -2304,10 +2306,16 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 								}
 
 								previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+
+								maxT -= Constants::epsilon;
+								if (maxT <= 0.0f) {
+									validMVNEEPath = false;
+									break;
+								}
 							}
 
 							//visibility check:
-							float maxT = tl_seedSegmentLengths[p];
+							
 							vec3 visibilityDirection = normalize(perturbedVertex - previousPerturbedVertex);
 
 							RTCRay shadowRay;
@@ -2333,6 +2341,10 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 
 									if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
 										previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+
+										if (lastSegmentLength - Constants::epsilon > 0.0f) {
+											lastSegmentLength -= Constants::epsilon;
+										}
 									}
 
 									//occlusion check:
@@ -3263,6 +3275,8 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 							//perform perturbation using gauss 2D
 							perturbVertexGaussian2D(sigma, u, v, seedVertex, &perturbedVertex, threadID);
 
+							float maxT = tl_seedSegmentLengths[p];
+
 							//for first perturbed vertex, check if perturbation violates the normal culling condition on the surface!
 							if (p == 0 && forkVertex.vertexType == TYPE_SURFACE) {
 								vec3 forkToFirstPerturbed = perturbedVertex - forkVertex.vertex;
@@ -3281,10 +3295,15 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 								}
 
 								previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+
+								maxT -= Constants::epsilon;
+								if (maxT <= 0.0f) {
+									validMVNEEPath = false;
+									break;
+								}
 							}
 
-							//visibility check:
-							float maxT = tl_seedSegmentLengths[p];
+							//visibility check:							
 							vec3 visibilityDirection = normalize(perturbedVertex - previousPerturbedVertex);
 
 							RTCRay shadowRay;
@@ -3310,6 +3329,10 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 
 									if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
 										previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+
+										if (lastSegmentLength - Constants::epsilon > 0.0f) {
+											lastSegmentLength -= Constants::epsilon;
+										}
 									}
 
 									//occlusion check:
@@ -4557,6 +4580,8 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 							 //perform perturbation using ggx radius and uniform angle in u,v plane 
 							 perturbVertexGGX2D(finalGGXAlpha, u, v, seedVertex, &perturbedVertex, threadID);
 
+							 float maxT = tl_seedSegmentLengths[p];
+
 							 //for first perturbed vertex, check if perturbation violates the normal culling condition on the surface!
 							 if (p == 0 && forkVertex.vertexType == TYPE_SURFACE) {
 								 vec3 forkToFirstPerturbed = perturbedVertex - forkVertex.vertex;
@@ -4575,10 +4600,15 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 								 }
 
 								 previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+
+								 maxT -= Constants::epsilon;
+								 if (maxT <= 0.0f) {
+									 validMVNEEPath = false;
+									 break;
+								 }
 							 }
 
-							 //visibility check:
-							 float maxT = tl_seedSegmentLengths[p];
+							 //visibility check:							 
 							 vec3 visibilityDirection = normalize(perturbedVertex - previousPerturbedVertex);
 
 							 RTCRay shadowRay;
@@ -4604,6 +4634,10 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 
 									 if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
 										 previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+
+										 if (lastSegmentLength - Constants::epsilon > 0.0f) {
+											 lastSegmentLength -= Constants::epsilon;
+										 }
 									 }
 
 									 //occlusion check:
