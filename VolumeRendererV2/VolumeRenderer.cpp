@@ -1601,7 +1601,8 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 
 							//perform perturbation using ggx radius and uniform angle in u,v plane 
 							perturbVertexGGX2D(finalGGXAlpha, u, v, seedVertex, &perturbedVertex, threadID);
-
+							
+							float maxT = tl_seedSegmentLengths[p];
 
 							//for first perturbed vertex, check if perturbation violates the normal culling condition on the surface!
 							if (p == 0 && forkVertex.vertexType == TYPE_SURFACE) {
@@ -1622,10 +1623,14 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 								}
 
 								previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+								maxT -= Constants::epsilon;
+								if (maxT <= 0.0f) {
+									validMVNEEPath = false;
+									break;
+								}
 							}
 
-							//visibility check:
-							float maxT = tl_seedSegmentLengths[p];
+							//visibility check:							
 							vec3 visibilityDirection = normalize(perturbedVertex - previousPerturbedVertex);
 
 							RTCRay shadowRay;
@@ -1643,15 +1648,18 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 							vec3 lastSegmentDir = lightVertex - previousPerturbedVertex;
 							float lastSegmentLength = length(lastSegmentDir);
 							if (lastSegmentLength > 0.0f) {
-								assert(lastSegmentLength > 0.0f);
 								lastSegmentDir /= lastSegmentLength;
 
 								//visibility check: first potential normal culling:
 								if (scene->lightSource->validHitDirection(lastSegmentDir)) {
 
 									if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
-										previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+										previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;										
+										if (lastSegmentLength - Constants::epsilon > 0.0f) {
+											lastSegmentLength -= Constants::epsilon;
+										}
 									}
+
 
 									//occlusion check:
 									RTCRay lastShadowRay;
