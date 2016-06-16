@@ -430,7 +430,8 @@ public:
 		shadowRay.dir[0] = dirToLight[0];
 		shadowRay.dir[1] = dirToLight[1];
 		shadowRay.dir[2] = dirToLight[2];
-		shadowRay.tnear = Constants::epsilon;
+		//shadowRay.tnear = Constants::epsilon;
+		shadowRay.tnear = 0.0f;
 		shadowRay.tfar = distanceToLight - Constants::epsilon;
 		shadowRay.geomID = 1;
 		shadowRay.primID = 0;

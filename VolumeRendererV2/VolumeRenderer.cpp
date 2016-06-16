@@ -625,8 +625,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS_NoScattering(const vec3& rayOrigin, con
 			//Normal culling at surface
 			if (cos_theta_i > 0.0f) {
 				RTCRay shadowRay;
-				//if (!scene->surfaceOccluded(intersectionPos, dirToLight, distanceToLight, shadowRay)) {
-				if (!scene->surfaceOccluded(intersectionPos + Constants::epsilon * intersectionNormal, dirToLight, distanceToLight, shadowRay)) {
+				if (!scene->surfaceOccluded(intersectionPos + Constants::epsilon * intersectionNormal, dirToLight, distanceToLight - Constants::epsilon, shadowRay)) {
 					float cos_theta_j = dot(-dirToLight, scene->lightSource->normal);
 					//normal culling at light
 					if (scene->lightSource->validHitDirection(dirToLight)) {
@@ -907,8 +906,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 				//normal culling at surface
 				if (cosTheta > 0.0f && distToLight > Constants::epsilon) {
 					RTCRay shadowRay;
-					//if (!scene->surfaceOccluded(intersectionPos, dirToLight, distanceToLight, shadowRay)) {
-					if (!scene->surfaceOccluded(intersectionPos + Constants::epsilon * intersectionNormal, dirToLight, distToLight, shadowRay)) {
+					if (!scene->surfaceOccluded(intersectionPos + Constants::epsilon * intersectionNormal, dirToLight, distToLight - Constants::epsilon, shadowRay)) {
 						double pathTracingPDF = diffuseBRDFSamplingPDF(intersectionNormal, dirToLight);
 						float cosThetaLight = dot(-dirToLight, scene->lightSource->normal);
 						//normal culling at light
