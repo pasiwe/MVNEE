@@ -46,7 +46,17 @@ The entire code is written in C++ 11, all libraries are only provided in 64 bit 
 			PATH_TRACING_MVNEE_Constants_ALPHA:
 				Optimized version of combination of Random Walk Path Tracing with Multiple Vertex Next Event Estimation. This version
 				uses a fixed GGX alpha value for perturbation, which results in a lot of variance.
-	
+			
+			PATH_TRACING_MVNEE_LIGHT_IMPORTANCE_SAMPLING:
+				Combination of Path tracing and MVNEE with the aim of light importance sampling. For the created sub path,
+				one segment starting from the light source is sampled in a sampled light direction. The MVNEE path connects to
+				the so sampled vertex instead of the light vertex.
+				
+			PATH_TRACING_MVNEE_LIGHT_IMPORTANCE_SAMPLING_IMPROVED:
+				Combination of Path tracing and MVNEE with the aim of light importance sampling. For the created sub path,
+				one segment starting from the light source is sampled in a sampled light direction. The MVNEE path connects to
+				the so sampled vertex instead of the light vertex. For this integrator, standard NEE is used on top of MVNEE.
+			
 	Linux:
 		For Linux, a makefile is provided in the "VolumeRendererV2" folder. Just run the makefile with "make". The embree library
 		used for object intersections will be used automatically. Note that this makefile only works for 64 bit systems.
