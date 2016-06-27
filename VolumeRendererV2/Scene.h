@@ -13,6 +13,7 @@
 #include "StringParser.h"
 
 #include <glm/glm.hpp>
+#include <vector>
 
 #include <embree2/rtcore.h>
 #include <embree2/rtcore_ray.h>
@@ -22,6 +23,7 @@
 #include "Camera.h"
 #include "LightSource.h"
 #include "Settings.h"
+#include "BSDF.h"
 
 #include <rapidXML/rapidxml.hpp>
 #include <rapidXML/rapidxml_utils.hpp>
@@ -35,39 +37,120 @@ struct EmbreeVertex   { float x, y, z, r; };
 struct Triangle { int v0, v1, v2; };
 struct Quad     { int v0, v1, v2, v3; };
 
-struct ObjectData{ string name; vec3 albedo; };
+//struct ObjectData{ string name; vec3 albedo; };
+struct ObjectData{ string name; BSDF* bsdf; };
 
-const int MAX_OBJECT_COUNT = 10;
+//const int MAX_OBJECT_COUNT = 100;
 
 class Scene
 {
 
 private:
 	RTCScene scene; //Scene object for embree	
-	ObjectData objectData[MAX_OBJECT_COUNT];
+	//ObjectData objectData[MAX_OBJECT_COUNT];
+	vector<ObjectData> objectData;
+
+	double* lightFluxes;
+	double lightFluxSum;
+
+	LightChoiceStrategy lightChoiceStrategy;
+
+	/*
+	* Light Sampling function pointer: the Light Sampling function is chosen at run time.
+	* All Light Sampling functions have to return a vertex on the chosen light source, as well as the index of the chosen light source.
+	* The parameters are the current path vertex, as well as 3 uniform random variables xi in [0,1)
+	*/
+	vec3(Scene::*lightSampler)(const vec3& pathVertex, const double& xi1, const double& xi2, const double& xi3, int* lightIndex) = NULL;
+
+	/*
+	* Light Vertex PDF function pointer: the Light Sampling function is chosen at run time.
+	* All Light Vertex PDF functions have to return a vertex on the chosen light source.
+	* The parameters are the current path vertex, as well as the light index used for sampling.
+	*/
+	double(Scene::*lightVertexPDF)(const vec3& pathVertex, int lightIndex) = NULL;
 
 public:
 	Camera camera;
-	LightSource* lightSource;
+
+	//Multiple Light Information
+	int lightSourceCount;
+	LightSource** lightSources;	
 	
 public:
 
 	Scene(RTCScene scene) : scene(scene) {
-		
+		lightFluxSum = 0.0;
+
+		//default light sampling strategy and PDF calculation:
+		lightChoiceStrategy = UNIFORM;
+		lightSampler = &Scene::sampleLightPositionUniformly;
+		lightVertexPDF = &Scene::getLightPositionSamplingPDFUniform;
+
+		objectData = vector<ObjectData>();
 	}
 
 	~Scene() {
-		if (lightSource->getType() == TypeLightDisk) {
-			LightDisk* lightDisk = (LightDisk*) lightSource;
-			delete lightDisk;
+		for (int i = 0; i < lightSourceCount; i++) {
+			delete lightSources[i];
+		}
+		delete[] lightSources;
+		delete[] lightFluxes;
+
+		for (int i = 0; i < (int)objectData.size(); i++) {
+			objectData[i].bsdf->deleteBSDF();
+		}
+		objectData.clear();
+	}
+
+	void initializeLights(const vector<LightSource*>& lightSourceContainer)
+	{
+		lightSourceCount = (int)lightSourceContainer.size();
+		lightSources = new LightSource*[lightSourceCount];
+		lightFluxes = new double[lightSourceCount];
+		for (int i = 0; i < lightSourceCount; i++) {
+			LightSource* currLight = lightSourceContainer[i];
+			lightSources[i] = currLight;
+			double lightFlux = (double)currLight->lightBrightness;
+			lightFluxes[i] = lightFlux;
+			lightFluxSum += lightFlux;
 		}
 	}
+
+
+	/**
+	* First samples a light source, then a vertex on that light source. The sampled vertex, as well as the index of the chosen light source is returned.
+	* An index of -1 indicates an error and should be handled appropriately.
+	*/
+	inline vec3 sampleLightPosition(const vec3& pathVertex, const double& xi1, const double& xi2, const double& xi3, int* lightIndex)
+	{
+		return (*this.*lightSampler)(pathVertex, xi1, xi2, xi3, lightIndex);
+	}
+
+	inline double getLightVertexSamplingPDF(const vec3& pathVertex, int lightIndex)
+	{
+		return (*this.*lightVertexPDF)(pathVertex, lightIndex);
+	}
+
+	
+	inline bool lightIntersected(const vec3& intersectionPos, int* intersectedLightSourceIndex)
+	{
+		for (int i = 0; i < lightSourceCount; i++)
+		{
+			if (lightSources[i]->lightIntersected(intersectionPos)) {
+				*intersectedLightSourceIndex = i;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 
 	/**
 	* Adds a ground plane to the scene .
 	* Returns the Embree geometry ID;
 	*/
-	unsigned int addGroundPlane(const string& name, const vec3& albedo, const float& sideLength, const float& yPosition)
+	unsigned int addGroundPlane(const string& name, BSDF* bsdf, const float& sideLength, const float& yPosition)
 	{
 		/* create a triangulated plane with 2 triangles and 4 vertices */
 		unsigned int mesh = rtcNewTriangleMesh(scene, RTC_GEOMETRY_STATIC, 2, 4);
@@ -87,7 +170,7 @@ public:
 		rtcUnmapBuffer(scene, mesh, RTC_INDEX_BUFFER);
 
 		ObjectData objectData;
-		objectData.albedo = albedo;
+		objectData.bsdf = bsdf;
 		objectData.name = name;
 		addObjectData(mesh, objectData);
 
@@ -95,7 +178,7 @@ public:
 	}
 
 	/* adds a cube to the scene */
-	unsigned int addCube(const vec3& center, float sideLengthHalf, const string& name, const vec3& albedo)
+	unsigned int addCube(const vec3& center, float sideLengthHalf, const string& name, BSDF* bsdf)
 	{
 		/* create a triangulated cube with 12 triangles and 8 vertices */
 		unsigned int mesh = rtcNewTriangleMesh(scene, RTC_GEOMETRY_STATIC, 12, 8);
@@ -143,7 +226,7 @@ public:
 		rtcUnmapBuffer(scene, mesh, RTC_INDEX_BUFFER);
 
 		ObjectData objectData;
-		objectData.albedo = albedo;
+		objectData.bsdf = bsdf;
 		objectData.name = name;
 		addObjectData(mesh, objectData);
 
@@ -154,7 +237,7 @@ public:
 	* Adds a circular plane specified by its center and radius, as well as the u and v vectors which together with the normal form a left handed coordinate system.
 	* The resulting circualr plane lies in the u-v-plane.
 	*/
-	unsigned int addCircularPlane(const vec3& center, const vec3& normal, const vec3& u, const vec3& v, const float& radius, const int triangleCount, const string& name, const vec3& albedo)
+	unsigned int addCircularPlane(const vec3& center, const vec3& normal, const vec3& u, const vec3& v, const float& radius, const int triangleCount, const string& name, BSDF* bsdf)
 	{
 		/* create a triangulated circular plane with triangleCount triangles*/
 		unsigned int mesh = rtcNewTriangleMesh(scene, RTC_GEOMETRY_STATIC, triangleCount, triangleCount + 1);
@@ -183,7 +266,7 @@ public:
 		rtcUnmapBuffer(scene, mesh, RTC_INDEX_BUFFER);
 
 		ObjectData objectData;
-		objectData.albedo = albedo;
+		objectData.bsdf = bsdf;
 		objectData.name = name;
 		addObjectData(mesh, objectData);
 
@@ -195,7 +278,7 @@ public:
 	* Adds the geometry of the specified obj. file to the scene.
 	* Returns the Embree geometry ID;
 	*/
-	unsigned int addObject(const string& objFilePath, const string& name, const vec3& albedo, const vec3& translationVector, const float& scaling, const bool& flipZAxis, const bool& flipVertexOrder) {
+	unsigned int addObject(const string& objFilePath, const string& name, BSDF* bsdf, const vec3& translationVector, const float& scaling, const bool& flipZAxis, const bool& flipVertexOrder) {
 
 		cout << "Object: " << name;
 
@@ -350,7 +433,7 @@ public:
 		rtcUnmapBuffer(scene, mesh, RTC_INDEX_BUFFER);
 
 		ObjectData objectData;
-		objectData.albedo = albedo;
+		objectData.bsdf = bsdf;
 		objectData.name = name;
 		addObjectData(mesh, objectData);
 
@@ -358,9 +441,8 @@ public:
 	}
 
 	bool addObjectData(int objectID, const ObjectData& data) {
-		assert(objectID < MAX_OBJECT_COUNT);
-		if (objectID >= 0 && objectID < MAX_OBJECT_COUNT) {
-			objectData[objectID] = data;
+		if (objectID == (int)objectData.size()) {
+			objectData.push_back(data);
 			return true;
 		}
 		else {
@@ -372,17 +454,29 @@ public:
 	/* Returns the object data for the given geometryID in the ObjectData struct pointer
 	* Return true if obejct was found, false otherwise.
 	*/
-	bool getObjectData(int geometryID, ObjectData* result) {
+	inline bool getObjectData(int geometryID, ObjectData* result) {
 
-		if (geometryID >= 0 && geometryID < MAX_OBJECT_COUNT) {
+		if (geometryID >= 0 && geometryID < (int)objectData.size()) {
 			*result = objectData[geometryID];
 			return true;
 		}
 		else {
-			result->name = "none";
-			result->albedo = vec3(0.0f);
+			cout << "ObjectData: index out of bounds!" << endl;
 			return false;
 		}		
+	}
+
+	/* Returns the BSDF for the given geometryID in the ObjectData struct pointer
+	* Return true if obejct was found, false otherwise.
+	*/
+	inline BSDF* getBSDF(int geometryID) {
+		if (geometryID >= 0 && geometryID < (int)objectData.size()) {
+			return objectData[geometryID].bsdf;
+		}
+		else {
+			cout << "ObjectData: index out of bounds!" << endl;
+			return 0;
+		}
 	}
 
 	/**
@@ -391,7 +485,7 @@ public:
 	*
 	* The intersection normal is stored in the output variable intersectionNormal
 	*/
-	bool intersectScene(const vec3& rayOrigin, const vec3& rayDir, RTCRay& ray, vec3& intersectionNormal)
+	inline bool intersectScene(const vec3& rayOrigin, const vec3& rayDir, RTCRay& ray, vec3& intersectionNormal)
 	{
 		ray.time = 0.0f;
 		ray.org[0] = rayOrigin.x;
@@ -418,21 +512,21 @@ public:
 	}
 
 	/**
-	* Checks for occlusion using a shadowray specified by a surface vertex and the direction to the light. 
-	* Returns true if the surface point is occluded, i.e. the surface point is NOT visible from the light.
+	* Checks for occlusion using a shadowray specified by a vertex and the direction to the light. 
+	* Returns true if the vertex is occluded on the segment specified by the direction and distance.
 	* The struct ray is used to output the intersection information when a hit was found.
 	*/
-	bool surfaceOccluded(const vec3& surfacePosition, const vec3& dirToLight, const float& distanceToLight, RTCRay& shadowRay)
+	inline bool vertexOccluded(const vec3& vertexPosition, const vec3& direction, const float& occlusionDistance, RTCRay& shadowRay)
 	{
-		shadowRay.org[0] = surfacePosition[0];
-		shadowRay.org[1] = surfacePosition[1];
-		shadowRay.org[2] = surfacePosition[2];
-		shadowRay.dir[0] = dirToLight[0];
-		shadowRay.dir[1] = dirToLight[1];
-		shadowRay.dir[2] = dirToLight[2];
+		shadowRay.org[0] = vertexPosition[0];
+		shadowRay.org[1] = vertexPosition[1];
+		shadowRay.org[2] = vertexPosition[2];
+		shadowRay.dir[0] = direction[0];
+		shadowRay.dir[1] = direction[1];
+		shadowRay.dir[2] = direction[2];
 		//shadowRay.tnear = Constants::epsilon;
 		shadowRay.tnear = 0.0f;
-		shadowRay.tfar = distanceToLight - Constants::epsilon;
+		shadowRay.tfar = occlusionDistance - Constants::epsilon;
 		shadowRay.geomID = 1;
 		shadowRay.primID = 0;
 		shadowRay.mask = -1;
@@ -489,7 +583,12 @@ public:
 		xml_attribute<>* version =  sceneNode->first_attribute("version");
 		string v = version->value();
 		cout << "Scene: version " << v << endl;
-		if (v == "1.0.0") {
+		if (v != "1.2.0") {
+			cout << "The scene file version is out of date!" << endl;
+			return false;
+		}
+		else {
+			vector<LightSource*> lightSourcesContainer = vector<LightSource*>();
 
 			//Integrator
 			xml_node<>* integratorNode = sceneNode->first_node("integrator");
@@ -547,6 +646,33 @@ public:
 						return false;
 					}
 				}
+				else if (currName == "lightChoiceStrategy") {
+					string strategyString = intSubNode->first_attribute("type")->value();
+					if (strategyString == "UNIFORM") {
+						lightChoiceStrategy = UNIFORM;
+						lightSampler = &Scene::sampleLightPositionUniformly;
+						lightVertexPDF = &Scene::getLightPositionSamplingPDFUniform;
+					}
+					else if (strategyString == "INTENSITY_BASED") {
+						lightChoiceStrategy = INTENSITY_BASED;
+						lightSampler = &Scene::sampleLightPositionFluxBased;
+						lightVertexPDF = &Scene::getLightPositionSamplingPDF_FluxBased;
+					}
+					else if (strategyString == "INTENSITY_DISTANCE_BASED") {
+						lightChoiceStrategy = INTENSITY_DISTANCE_BASED;
+						lightSampler = &Scene::sampleLightPositionDistanceAndFluxBased;
+						lightVertexPDF = &Scene::getLightPositionSamplingPDF_DistanceAndFluxBased;
+					}
+					else if (strategyString == "INTENSITY_DISTANCE_DIRECTION_BASED") {
+						lightChoiceStrategy = INTENSITY_DISTANCE_DIRECTION_BASED;
+						lightSampler = &Scene::sampleLightPositionDistanceDirectionFluxBased;
+						lightVertexPDF = &Scene::getLightPositionSamplingPDF_DistanceDirectionFluxBased;
+					}
+					else {
+						cout << "invalid light choice strategy!" << endl;
+						return false;
+					}
+				}
 				else {
 					cout << "invalid integrator param! " << currName << endl;
 				}
@@ -584,6 +710,12 @@ public:
 			}
 			else if (integrator == "PATH_TRACING_RANDOM_WALK") {
 				integratorEnum = PATH_TRACING_RANDOM_WALK;
+			}
+			else if (integrator == "PATH_TRACING_MVNEE_LIGHT_IMPORTANCE_SAMPLING") {
+				integratorEnum = PATH_TRACING_MVNEE_LIGHT_IMPORTANCE_SAMPLING;
+			}
+			else if (integrator == "PATH_TRACING_MVNEE_LIGHT_IMPORTANCE_SAMPLING_IMPROVED") {
+				integratorEnum = PATH_TRACING_MVNEE_LIGHT_IMPORTANCE_SAMPLING_IMPROVED;
 			}
 			else  {
 				cout << "invalid integrator!! " << integrator << endl;
@@ -627,48 +759,88 @@ public:
 				}
 			}
 
-			//Lightsource
-			xml_node<>* lightNode = sceneNode->first_node("lightsource");
-			vec3 lightCenter, lightNormal, lightU, lightV, lightColor;
-			float lightBrightness, lightRadius;
+			//Lightsources
 
-			for (xml_node<>* lightSubNode = lightNode->first_node(); lightSubNode; lightSubNode = lightSubNode->next_sibling()) {
-				string currName = lightSubNode->name();
+			cout << "adding lights to the scene..." << endl;
 
-				if (currName == "position") {
-					xml_attribute<>* posAttr = lightSubNode->first_attribute("center");
-					StringParser posString = StringParser(posAttr->value());
-					lightCenter = posString.getVec3Param("");
+			for (xml_node<>* lightNode = sceneNode->first_node("lightsource"); lightNode; lightNode = lightNode->next_sibling("lightsource")) {
+				LightTypeEnum lightType;
+				string typeString = lightNode->first_attribute("type")->value();
+				
+				vec3 lightCenter, lightNormal, lightU, lightV, lightColor;
+				float lightBrightness, lightRadius;
+				double cosExponent;
 
-					posAttr = lightSubNode->first_attribute("normal");
-					StringParser normalString = StringParser(posAttr->value());
+				for (xml_node<>* lightSubNode = lightNode->first_node(); lightSubNode; lightSubNode = lightSubNode->next_sibling()) {
+					string currName = lightSubNode->name();
 
-					lightNormal = normalString.getVec3Param("");
+					if (currName == "position") {
+						xml_attribute<>* posAttr = lightSubNode->first_attribute("center");
+						StringParser posString = StringParser(posAttr->value());
+						lightCenter = posString.getVec3Param("");
 
-					//create tangent frame from normal direction for u,v directions:
-					coordinateSystem(lightNormal, lightU, lightV);
+						posAttr = lightSubNode->first_attribute("normal");
+						StringParser normalString = StringParser(posAttr->value());
+
+						lightNormal = normalString.getVec3Param("");
+
+						//create tangent frame from normal direction for u,v directions:
+						coordinateSystem(lightNormal, lightU, lightV);
+					}
+					else if (currName == "radius") {
+						xml_attribute<>* radAttr = lightSubNode->first_attribute("value");
+						lightRadius = (float)atof(radAttr->value());
+					}
+					else if (currName == "brightness") {
+						xml_attribute<>* brightAttr = lightSubNode->first_attribute("value");
+						lightBrightness = (float)atof(brightAttr->value());
+					}
+					else if (currName == "color") {
+						xml_attribute<>* colorAttr = lightSubNode->first_attribute("value");
+						StringParser colorString = StringParser(colorAttr->value());
+						lightColor = colorString.getVec3Param("");
+					}
+					else if (currName == "cosExponent") {
+						xml_attribute<>* cosExpAttr = lightSubNode->first_attribute("value");
+						StringParser cosExpString = StringParser(cosExpAttr->value());
+						cosExponent = cosExpString.getDoubleParam("");
+					}
+					else {
+						cout << "invalid light param! " << currName << endl;
+					}					
 				}
-				else if (currName == "radius") {
-					xml_attribute<>* radAttr = lightSubNode->first_attribute("value");
-					lightRadius = (float)atof(radAttr->value());
+
+				DiffuseLambertianBSDF* lightBSDF = new DiffuseLambertianBSDF(lightColor);
+
+				if (typeString == "lightdisk") {
+					lightType = TypeLightDisk;
+
+					LightDisk* currLightSource = new LightDisk(lightCenter, lightNormal, lightU, lightV, lightColor, lightBrightness, lightRadius);
+					//add light source to container
+					lightSourcesContainer.push_back(currLightSource);
+					//add light object geometry to embree scene
+					addCircularPlane(lightCenter, lightNormal, lightU, lightV, lightRadius, 100, "disklight", lightBSDF);
 				}
-				else if (currName == "brightness") {
-					xml_attribute<>* brightAttr = lightSubNode->first_attribute("value");
-					lightBrightness = (float)atof(brightAttr->value());
-				}
-				else if (currName == "color") {
-					xml_attribute<>* colorAttr = lightSubNode->first_attribute("value");
-					StringParser colorString = StringParser(colorAttr->value());
-					lightColor = colorString.getVec3Param("");
+				else if (typeString == "spotlight") {
+					lightType = TypeSpotlight;
+
+					SpotLight* currLightSource = new SpotLight(lightCenter, lightNormal, lightU, lightV, lightColor, lightBrightness, lightRadius, cosExponent);
+					//add light source to container
+					lightSourcesContainer.push_back(currLightSource);
+					//add light object geometry to embree scene
+					addCircularPlane(lightCenter, lightNormal, lightU, lightV, lightRadius, 100, "spotlight", lightBSDF);
 				}
 				else {
-					cout << "invalid light param! " << currName << endl;
+					cout << "Invalid Light type!" << endl;
+					return false;
 				}
+
+				
 			}
-					
-			lightSource = new LightDisk(lightCenter, lightNormal, lightU, lightV, lightColor, lightBrightness, lightRadius);
-			//add light object geometry to embree scene
-			addCircularPlane(lightCenter, lightNormal, lightU, lightV, lightRadius, 100, "light", lightColor);
+
+			//create light array and add all lights!
+			initializeLights(lightSourcesContainer);	
+
 
 			//MediumSettings
 			xml_node<>* mediumNode = sceneNode->first_node("medium");
@@ -722,20 +894,51 @@ public:
 						flipVertexOrder = true;
 					}
 
-					StringParser colorS = StringParser(objectNode->first_node("material")->first_attribute("albedo")->value());
-					vec3 albedo = colorS.getVec3Param("");
+					//parse Material:
+					BSDF* materialBSDF = 0;
 
-					objID = addObject(objFilePath, name, albedo, translation, scale, flipZ, flipVertexOrder);
+					xml_node<>* materialNode = objectNode->first_node("material");
+					string typeS = materialNode->first_attribute("type")->value();
+
+					if (typeS == "diffuse") {
+						//Lambertian Diffuse BRDF
+						StringParser colorS = StringParser(materialNode->first_attribute("albedo")->value());
+						vec3 albedo = colorS.getVec3Param("");
+						DiffuseLambertianBSDF* diffuse = new DiffuseLambertianBSDF(albedo);
+						materialBSDF = diffuse;
+					}					
+					else {
+						cout << "invalid material type!" << endl;
+						return false;
+					}					
+
+					objID = addObject(objFilePath, name, materialBSDF, translation, scale, flipZ, flipVertexOrder);
 				}
 				else if (modelType == "plane") {
 					StringParser translationS = StringParser(objectNode->first_node("transform")->first_attribute("y")->value());
 					float yTransl = translationS.getFloatParam("");
 					StringParser scaleS = StringParser(objectNode->first_node("transform")->first_attribute("scale")->value());
-					float scale = scaleS.getFloatParam("");
-					StringParser colorS = StringParser(objectNode->first_node("material")->first_attribute("albedo")->value());
-					vec3 albedo = colorS.getVec3Param("");
+					float scale = scaleS.getFloatParam("");					
 
-					objID = addGroundPlane(name, albedo, scale, yTransl);
+					//parse Material:
+					BSDF* materialBSDF = 0;
+
+					xml_node<>* materialNode = objectNode->first_node("material");
+					string typeS = materialNode->first_attribute("type")->value();
+
+					if (typeS == "diffuse") {
+						//Lambertian Diffuse BRDF
+						StringParser colorS = StringParser(materialNode->first_attribute("albedo")->value());
+						vec3 albedo = colorS.getVec3Param("");
+						DiffuseLambertianBSDF* diffuse = new DiffuseLambertianBSDF(albedo);
+						materialBSDF = diffuse;
+					}					
+					else {
+						cout << "invalid material type for ground plane!" << endl;
+						return false;
+					}
+
+					objID = addGroundPlane(name, materialBSDF, scale, yTransl);
 				}
 				else {
 					cout << "invalid model type!" << modelType << endl;
@@ -748,13 +951,273 @@ public:
 				
 			}
 		}
-		else {
-			cout << "incorrect scene file version!: " << v << endl;
-			return false;
-		}
-
+		
 		cout << "scene xml file successfully parsed." << endl;
 		return true;
 	}
+
+	void printLightChoiceStrategy(ofstream& o) {
+		switch (lightChoiceStrategy) {
+			case UNIFORM: o << "UNIFORM" << endl; break;
+			case INTENSITY_BASED: o << "INTENSITY_BASED" << endl; break;
+			case INTENSITY_DISTANCE_BASED: o << "INTENSITY_DISTANCE_BASED" << endl; break;
+			case INTENSITY_DISTANCE_DIRECTION_BASED: o << "INTENSITY_DISTANCE_DIRECTION_BASED" << endl; break;
+			default: cout << "unknown" << endl; break;
+		}
+	}
+
+private:
+
+	/**
+	* First samples a light source uniformly. Then a vertex on the chosen light source is sampled.
+	* The index of the light source, as well as the sampled vertex are returned.
+	*/
+	inline vec3 sampleLightPositionUniformly(const vec3& pathVertex, const double& xi1, const double& xi2, const double& xi3, int* lightIndex)
+	{
+		double lightCount = (double) lightSourceCount;
+		double lightPDF = 1.0 / lightCount;
+			
+		//sample light source
+		double currSum = 0.0;
+		int finalLightIndex = lightSourceCount - 1;
+		for (int i = 0; i < lightSourceCount - 1; i++)
+		{
+			currSum += lightPDF;
+			if (xi1 <= currSum) {
+				finalLightIndex = i;
+				break;
+			}
+		}
+
+		vec3 lightPosSample = lightSources[finalLightIndex]->sampleLightPosition(xi2, xi3);
+
+		*lightIndex = finalLightIndex;
+		return lightPosSample;
+	}
+
+	inline double getLightPositionSamplingPDFUniform(const vec3& pathVertex, int lightIndex)
+	{
+		double lightCount = (double)lightSourceCount;
+		double lightPDF = 1.0 / lightCount;
+		double vertexSamplingPDF = lightSources[lightIndex]->getPositionSamplingPDF();
+
+		double samplingPDF = vertexSamplingPDF * lightPDF;
+		return samplingPDF;
+	}
+
+	/**
+	* First samples a light source based on light flux. Then a vertex on the chosen light source is sampled.
+	* The index of the light source, as well as the sampled vertex are returned.
+	*/
+	inline vec3 sampleLightPositionFluxBased(const vec3& pathVertex, const double& xi1, const double& xi2, const double& xi3, int* lightIndex)
+	{
+		//sample light source
+		double currSum = 0.0;
+		int finalLightIndex = lightSourceCount - 1;
+		for (int i = 0; i < lightSourceCount - 1; i++)
+		{
+			double currPDF = lightFluxes[i] / lightFluxSum;
+			currSum += currPDF;
+			if (xi1 <= currSum) {
+				finalLightIndex = i;
+				break;
+			}
+		}
+
+		vec3 lightPosSample = lightSources[finalLightIndex]->sampleLightPosition(xi2, xi3);
+
+		*lightIndex = finalLightIndex;
+		return lightPosSample;
+	}
+
+	inline double getLightPositionSamplingPDF_FluxBased(const vec3& pathVertex, int lightIndex)
+	{
+		double lightPDF = lightFluxes[lightIndex] / lightFluxSum;;
+		double vertexSamplingPDF = lightSources[lightIndex]->getPositionSamplingPDF();
+
+		double samplingPDF = vertexSamplingPDF * lightPDF;
+		return samplingPDF;
+	}
+
+	/**
+	* First samples a light source based on light flux and distance. Then a vertex on the chosen light source is sampled.
+	* The index of the light source, as well as the sampled vertex are returned.
+	*/
+	inline vec3 sampleLightPositionDistanceAndFluxBased(const vec3& pathVertex, const double& xi1, const double& xi2, const double& xi3, int* lightIndex)
+	{
+		//calculate normalization factor
+		double normalizationFactor = 0.0;
+		for (int i = 0; i < lightSourceCount; i++)
+		{
+			double currDistance = (double)length(lightSources[i]->center - pathVertex);
+			assert(currDistance > 0.0);
+			double currValue = (lightFluxes[i] / currDistance);
+			assert(isfinite(currValue));
+			normalizationFactor += currValue;
+		}
+
+		//sample light source
+		double currSum = 0.0;
+		int finalLightIndex = lightSourceCount - 1;
+		for (int i = 0; i < lightSourceCount - 1; i++)
+		{
+			double currDistance = (double)length(lightSources[i]->center - pathVertex);
+
+			double currPDF = (lightFluxes[i] / currDistance) / normalizationFactor;
+			currSum += currPDF;
+			if (xi1 <= currSum) {
+				finalLightIndex = i;
+				break;
+			}
+		}
+
+		vec3 lightPosSample = lightSources[finalLightIndex]->sampleLightPosition(xi2, xi3);
+
+		*lightIndex = finalLightIndex;
+		return lightPosSample;
+	}
+
+	inline double getLightPositionSamplingPDF_DistanceAndFluxBased(const vec3& pathVertex, int lightIndex)
+	{
+		double lightValue;
+
+		//calculate normalization factor
+		double normalizationFactor = 0.0;
+		for (int i = 0; i < lightSourceCount; i++)
+		{
+			double currDistance = (double)length(lightSources[i]->center - pathVertex);
+			assert(currDistance > 0.0);
+			double currValue = (lightFluxes[i] / currDistance);
+			assert(isfinite(currValue));
+
+			if (i == lightIndex) {
+				lightValue = currValue;
+			}
+
+			normalizationFactor += currValue;
+		}
+
+
+		double lightPDF = lightValue / normalizationFactor;
+		double vertexSamplingPDF = lightSources[lightIndex]->getPositionSamplingPDF();
+
+		double samplingPDF = vertexSamplingPDF * lightPDF;
+		return samplingPDF;
+	}
+
+	/**
+	* First samples a light source based on light flux, distance and direction. Then a vertex on the chosen light source is sampled.
+	* The index of the light source, as well as the sampled vertex are returned.
+	*/
+	inline vec3 sampleLightPositionDistanceDirectionFluxBased(const vec3& pathVertex, const double& xi1, const double& xi2, const double& xi3, int* lightIndex)
+	{
+		//calculate normalization factor
+		double normalizationFactor = 0.0;
+		for (int i = 0; i < lightSourceCount; i++)
+		{
+			vec3 currDirection = lightSources[i]->center - pathVertex;
+			float currDistance = length(currDirection);
+			assert(currDistance > 0.0);
+			currDirection /= currDistance;
+
+			double intensity;
+
+			if (lightSources[i]->validHitDirection(currDirection)) {
+				intensity = lightSources[i]->getIntensity(lightSources[i]->center, currDirection);
+			}
+			else {
+				intensity = 0;
+			}
+
+			double currValue = (intensity / (double)currDistance);
+			assert(isfinite(currValue));
+			normalizationFactor += currValue;
+		}		
+
+		if (normalizationFactor == 0.0) {
+			//cout << "can't choose light source! -> normal culling on all light sources, forkVertex height at: " << pathVertex.y << endl;
+			*lightIndex = -1;
+			return vec3(0.0f);
+		}
+
+		//sample light source
+		double currSum = 0.0;
+		int finalLightIndex = lightSourceCount - 1;
+		for (int i = 0; i < lightSourceCount - 1; i++)
+		{
+			vec3 currDirection = lightSources[i]->center - pathVertex;
+			float currDistance = length(currDirection);
+			assert(currDistance > 0.0);
+			currDirection /= currDistance;
+			
+			double intensity;
+			if (lightSources[i]->validHitDirection(currDirection)) {
+				intensity = lightSources[i]->getIntensity(lightSources[i]->center, currDirection);
+			}
+			else {
+				intensity = 0;
+			}
+
+			double currPDF = (intensity / (double)currDistance) / normalizationFactor;	
+			assert(isfinite(currPDF));
+
+			currSum += currPDF;
+			if (xi1 <= currSum) {
+				finalLightIndex = i;
+				break;
+			}
+		}
+
+		vec3 lightPosSample = lightSources[finalLightIndex]->sampleLightPosition(xi2, xi3);
+
+		*lightIndex = finalLightIndex;
+		return lightPosSample;
+	}
+
+	inline double getLightPositionSamplingPDF_DistanceDirectionFluxBased(const vec3& pathVertex, int lightIndex)
+	{
+		double lightValue;
+
+		//calculate normalization factor
+		double normalizationFactor = 0.0;
+		for (int i = 0; i < lightSourceCount; i++)
+		{
+			vec3 currDirection = lightSources[i]->center - pathVertex;
+			float currDistance = length(currDirection);
+			assert(currDistance > 0.0);
+			currDirection /= currDistance;
+
+			double intensity;
+			if (lightSources[i]->validHitDirection(currDirection)) {
+				intensity = lightSources[i]->getIntensity(lightSources[i]->center, currDirection);
+			}
+			else {
+				intensity = 0;
+			}
+
+			double currValue = (intensity / (double)currDistance);
+
+			if (i == lightIndex) {
+				lightValue = currValue;
+			}
+
+			assert(isfinite(currValue));
+			normalizationFactor += currValue;
+		}
+		
+		double lightPDF;
+		if (normalizationFactor > 0.0) {
+			lightPDF = lightValue / normalizationFactor;
+		}
+		else {
+			return 0.0;			
+		}
+			
+		double vertexSamplingPDF = lightSources[lightIndex]->getPositionSamplingPDF();
+
+		double samplingPDF = vertexSamplingPDF * lightPDF;
+		return samplingPDF;
+	}
+	
 
 };

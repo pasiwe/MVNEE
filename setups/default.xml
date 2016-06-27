@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 
-<scene version="1.0.0">
+<scene version="1.2.0">
 	<integrator type="PATH_TRACING_MVNEE_FINAL">
 		<output sessionName="mvneeTest" width="256" height="256"/>
 		<samples spp="200"/>
@@ -34,21 +34,13 @@
 	<model type="obj" name="suzanne">
 		<filename value="../models/suzanne.obj"/>		
 		<transform translate="0 0 1" scale="0.7" flipZ="true" flipVertexOrder="false"/>
-		<!-- Albedo for diffuse Lambertian BRDF -->
-		<material albedo="1 0 0"/>
+		<!-- diffuse Lambertian BRDF -->
+		<material type="diffuse" albedo="1 0 0"/>
 	</model>
-	
-	<!--
-	<model type="obj" name="sphere">
-		<filename value="../models/sphere.obj "/>		
-		<transform translate="0 1 0" scale="1.0" flipZ="true" flipVertexOrder="false"/>
-		<material albedo="1 0 0"/>
-	</model>
-	-->
 	
 	<model type="plane" name="groundPlane">
 		<transform y="-1" scale="10.0"/>
-		<material albedo="0.3 0.4 0.3"/>
+		<material type="diffuse" albedo="0.3 0.4 0.3"/>
 	</model>
 	
 </scene>

@@ -274,39 +274,39 @@ static inline vec3 sampleHenyeyGreensteinDirection(vec3 previousDirection, const
 	return normalize(worldSampleDir);
 }
 
-/* Evaluates the Diffuse BRDF*/
-static inline vec3 evalDiffuseBRDF(const vec3& albedo) {
-	return (float)M_1_PI * albedo;
-}
-
-/* Samples a direction in the cosine hemisphere in direction of the given normal */
-static inline vec3 sampleDiffuseBRDFDir(const vec3& normal, const double& xi1D, const double& xi2D)
-{
-	vec3 u, v;
-	coordinateSystem(normal, u, v);
-
-	float xi1 = (float)xi1D;
-
-	float inner = sqrtf(1.0f - xi1);
-	float theta = acosf(inner);
-	float phi = (float)(2.0 * M_PI * xi2D);
-
-	vec3 result = sin(theta)*cos(phi)*u + sin(theta)*sin(phi)*v + cos(theta)*normal;
-
-	return result;
-}
-
-/* Returns the pdf for sampling the given direction in the hemisphere around the normal on a diffuse BRDF */
-static inline double diffuseBRDFSamplingPDF(const vec3& normal, const vec3& sampledDir)
-{
-	float cos_Theta = dot(normal, sampledDir);
-	if (cos_Theta > 0.0f) {
-		return M_1_PI * (double)cos_Theta;
-	}
-	else {
-		return 0.0;
-	}
-}
+///* Evaluates the Diffuse BRDF*/
+//static inline vec3 evalDiffuseBRDF(const vec3& albedo) {
+//	return (float)M_1_PI * albedo;
+//}
+//
+///* Samples a direction in the cosine hemisphere in direction of the given normal */
+//static inline vec3 sampleDiffuseBRDFDir(const vec3& normal, const double& xi1D, const double& xi2D)
+//{
+//	vec3 u, v;
+//	coordinateSystem(normal, u, v);
+//
+//	float xi1 = (float)xi1D;
+//
+//	float inner = sqrtf(1.0f - xi1);
+//	float theta = acosf(inner);
+//	float phi = (float)(2.0 * M_PI * xi2D);
+//
+//	vec3 result = sin(theta)*cos(phi)*u + sin(theta)*sin(phi)*v + cos(theta)*normal;
+//
+//	return result;
+//}
+//
+///* Returns the pdf for sampling the given direction in the hemisphere around the normal on a diffuse BRDF */
+//static inline double diffuseBRDFSamplingPDF(const vec3& normal, const vec3& sampledDir)
+//{
+//	float cos_Theta = dot(normal, sampledDir);
+//	if (cos_Theta > 0.0f) {
+//		return M_1_PI * (double)cos_Theta;
+//	}
+//	else {
+//		return 0.0;
+//	}
+//}
 
 static inline double misPowerWeight(double pdfMain, double pdf2)
 {
@@ -374,6 +374,7 @@ static inline float misBalanceWeight(const double& mainPDF, const double& pathTr
 
 	if (weight > 1.0) {
 		cout << "MIS WEIGHT > 1: " << setprecision(12) << weight << endl;
+		return 0.0f;
 	}
 
 	assert(weight >= 0.0);
@@ -517,6 +518,47 @@ static inline double sampleFreePathLength(const double& xi, const double& mu_t)
 	freePathLength = (float)(-log(1.0 - xi) / mu_t);
 	assert(freePathLength >= 0.0f);
 	return (double)freePathLength;
+}
+
+/** Samples a free path length in the homogenous medium. Makes sure that the result is > 0, which would
+* lead to invalid floating point values later on.
+*/
+static inline float sampleLimitedFreePathLength(const double& xi, const double& mu_t, const float& minDistance, const float& maxDistance)
+{
+	double xiMin = 1.0 - exp(-mu_t * (double)minDistance);
+	double xiMax = 1.0 - exp(-mu_t * (double)maxDistance);
+
+	double width = xiMax - xiMin;
+
+	double xiFinal = xiMin + xi * width;
+
+	float freePathLength = (float)(-log(1.0 - xiFinal) / mu_t);
+
+	assert(freePathLength >= 0.0f);
+	return freePathLength;
+}
+
+static inline double getLimitedFreePathPDF(const float& sampledDistance ,const double& mu_t, const float& minDistance, const float& maxDistance)
+{
+	//if (maxDistance <= minDistance) {
+	//	cout << "error: limited free path min >= max!" << endl;
+	//	return 0.0;
+	//}
+
+	assert(maxDistance > minDistance);
+	assert(minDistance >= 0.0f);
+	assert(sampledDistance > 0.0f);
+
+	double dMinCDF = 1.0 - exp(-mu_t * (double)minDistance);
+	double dMaxCDF = 1.0 - exp(-mu_t * (double)maxDistance);
+
+	double normalization = dMaxCDF - dMinCDF;
+	assert(isfinite(normalization));
+	assert(normalization > 0.0);
+
+	double samplingPDF = mu_t * exp(-mu_t * (double)sampledDistance);
+
+	return samplingPDF / normalization;
 }
 
 

@@ -132,9 +132,8 @@ void VolumeRenderer::renderScene()
 		case PATH_TRACING_NEE_MIS: integrator = &VolumeRenderer::pathTracing_NEE_MIS; break;
 		case PATH_TRACING_MVNEE: integrator = &VolumeRenderer::pathTracing_MVNEE; break;
 		case PATH_TRACING_MVNEE_FINAL: integrator = &VolumeRenderer::pathTracing_MVNEE_FINAL; break;
-		/*case PATH_TRACING_MVNEE_OPTIMIZED: integrator = &VolumeRenderer::pathTracing_MVNEE_Optimized; break;
-		case PATH_TRACING_MVNEE_OPTIMIZED2: integrator = &VolumeRenderer::pathTracing_MVNEE_Optimized2; break;
-		case PATH_TRACING_MVNEE_OPTIMIZED3: integrator = &VolumeRenderer::pathTracing_MVNEE_Optimized3; break;*/
+		case PATH_TRACING_MVNEE_LIGHT_IMPORTANCE_SAMPLING: integrator = &VolumeRenderer::pathTracing_MVNEE_LightImportanceSampling; break;
+		case PATH_TRACING_MVNEE_LIGHT_IMPORTANCE_SAMPLING_IMPROVED: integrator = &VolumeRenderer::pathTracing_MVNEE_LightImportanceSamplingImproved; break;
 		case PATH_TRACING_MVNEE_GAUSS_PERTURB: integrator = &VolumeRenderer::pathTracing_MVNEE_GaussPerturb; break;
 		case PATH_TRACING_MVNEE_Constants_ALPHA: integrator = &VolumeRenderer::pathTracing_MVNEE_ConstantsAlpha; break;
 	}
@@ -251,6 +250,8 @@ void VolumeRenderer::renderSceneWithMaximalDuration(double maxDurationMinutes)
 		case PATH_TRACING_NEE_MIS: integrator = &VolumeRenderer::pathTracing_NEE_MIS; break;
 		case PATH_TRACING_MVNEE: integrator = &VolumeRenderer::pathTracing_MVNEE; break;
 		case PATH_TRACING_MVNEE_FINAL: integrator = &VolumeRenderer::pathTracing_MVNEE_FINAL; break;
+		case PATH_TRACING_MVNEE_LIGHT_IMPORTANCE_SAMPLING: integrator = &VolumeRenderer::pathTracing_MVNEE_LightImportanceSampling; break;
+		case PATH_TRACING_MVNEE_LIGHT_IMPORTANCE_SAMPLING_IMPROVED: integrator = &VolumeRenderer::pathTracing_MVNEE_LightImportanceSamplingImproved; break;
 		case PATH_TRACING_MVNEE_GAUSS_PERTURB: integrator = &VolumeRenderer::pathTracing_MVNEE_GaussPerturb; break;
 		case PATH_TRACING_MVNEE_Constants_ALPHA: integrator = &VolumeRenderer::pathTracing_MVNEE_ConstantsAlpha; break;
 	}	
@@ -468,7 +469,7 @@ vec3 VolumeRenderer::intersectionTestRendering(const vec3& rayOrigin, const vec3
 	if (scene->intersectScene(rayOrigin, rayDir, ray, intersectionNormal)) {
 		vec3 intersectionPos = rayOrigin + ray.tfar * rayDir;
 
-		if (scene->lightSource->lightIntersected(intersectionPos)) {
+		if (scene->lightSources[0]->lightIntersected(intersectionPos)) {
 			finalPixel = vec3(1.0f, 1.0f, 1.0f);
 		}
 		else {
@@ -501,13 +502,11 @@ vec3 VolumeRenderer::pathTracingNoScattering(const vec3& rayOrigin, const vec3& 
 
 				vec3 intersectionPos = currPosition + ray.tfar * currDir;
 
-				//check if light was hit:
-				if (scene->lightSource->lightIntersected(intersectionPos)) {
-					float cos_theta_L = dot(-currDir, scene->lightSource->normal);
-
+				int hitLightSourceIndex;
+				if (scene->lightIntersected(intersectionPos, &hitLightSourceIndex)) {
 					//Normal culling
-					if (scene->lightSource->validHitDirection(currDir)) {
-						finalValue += (measurementContrib / (float)pdf) * scene->lightSource->Le;
+					if (scene->lightSources[hitLightSourceIndex]->validHitDirection(currDir)) {
+						finalValue += (measurementContrib / (float)pdf) * scene->lightSources[hitLightSourceIndex]->getEmissionIntensity(intersectionPos, currDir);
 					}
 
 					//stop tracing
@@ -519,20 +518,17 @@ vec3 VolumeRenderer::pathTracingNoScattering(const vec3& rayOrigin, const vec3& 
 					break;
 				}
 
-				ObjectData surfaceData;
-				scene->getObjectData(ray.geomID, &surfaceData);
+				BSDF* bsdfData = scene->getBSDF(ray.geomID);
 
 				//sample new direction of diffuse BRDF:
-				vec3 newDir = sampleDiffuseBRDFDir(intersectionNormal, sample1D(threadID), sample1D(threadID));
-				float cos_theta = dot(newDir, intersectionNormal);
-				if (cos_theta <= 0.0f) {
+				vec3 newDir = bsdfData->sampleBSDFDirection(intersectionNormal, currDir, sample1D(threadID), sample1D(threadID));  
+				if (!bsdfData->validOutputDirection(intersectionNormal, newDir)) {
 					break;
 				}
-				assert(cos_theta > 0.0f);
 
 				//update measurementContrib and pdf:				
-				measurementContrib *= evalDiffuseBRDF(surfaceData.albedo) * cos_theta;
-				pdf *= diffuseBRDFSamplingPDF(intersectionNormal, newDir);
+				measurementContrib *= bsdfData->evalBSDF(intersectionNormal, newDir, currDir); 
+				pdf *= bsdfData->getBSDFDirectionPDF(intersectionNormal, newDir, currDir);
 
 				currPosition = intersectionPos + Constants::epsilon * intersectionNormal;
 				currDir = newDir;
@@ -574,13 +570,15 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS_NoScattering(const vec3& rayOrigin, con
 		RTCRay ray;
 		vec3 intersectionNormal;
 		if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal)) {
-			vec3 intersectionPos = currPosition + ray.tfar * currDir;			
+			vec3 intersectionPos = currPosition + ray.tfar * currDir;
 
 			//check if light was hit:
-			if (scene->lightSource->lightIntersected(intersectionPos)) {
-				float cos_theta_j = dot(-currDir, scene->lightSource->normal);
+			int hitLightIndex;
+			if (scene->lightIntersected(intersectionPos, &hitLightIndex)) {
+				LightSource* hitLight = scene->lightSources[hitLightIndex];
+				float cos_theta_j = dot(-currDir, hitLight->normal);
 				//Normal culling
-				if (scene->lightSource->validHitDirection(currDir)) {
+				if (hitLight->validHitDirection(currDir)) {
 					vec3 finalContribution = measurementContrib / (float)pdf;
 					assert(isfinite(finalContribution.x));
 
@@ -588,14 +586,14 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS_NoScattering(const vec3& rayOrigin, con
 					if (currSegmentLength > 0) {
 						float G_NEE = cos_theta_j / (ray.tfar * ray.tfar);
 						if (isfinite(G_NEE)) {
-							double lightSamplingPDF = scene->lightSource->getPositionSamplingPDF();
+							double lightSamplingPDF = scene->getLightVertexSamplingPDF(currPosition, hitLightIndex);
 							misWeight = misPowerWeight(lastDirSamplingPDF * G_NEE, lightSamplingPDF);
 						}
 						else {
 							misWeight = 0.0;
 						}
 					}
-					finalPixel += (float)misWeight * finalContribution * scene->lightSource->Le;
+					finalPixel += (float)misWeight * finalContribution * hitLight->getEmissionIntensity(intersectionPos, currDir);
 				}
 				//stop tracing
 				break;
@@ -607,89 +605,91 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS_NoScattering(const vec3& rayOrigin, con
 			}
 
 			//diffuse surface was hit: get objectData
-			ObjectData surfaceData;
-			scene->getObjectData(ray.geomID, &surfaceData);
+			BSDF* bsdfData = scene->getBSDF(ray.geomID);
 
 			/////////////////////////
 			// Next Event Estimation
 			/////////////////////////
 
-			vec3 lightPosSample = scene->lightSource->sampleLightPosition(sample1D(threadID), sample1D(threadID));		
+			//vec3 lightPosSample = scene->lightSource->sampleLightPosition(sample1D(threadID), sample1D(threadID));
+			int sampledLightIndex;
+			vec3 lightPosSample = scene->sampleLightPosition(intersectionPos, sample1D(threadID), sample1D(threadID), sample1D(threadID), &sampledLightIndex);
+			if (sampledLightIndex > -1) {
+				LightSource* sampledLightSource = scene->lightSources[sampledLightIndex];
 
-			vec3 dirToLight = lightPosSample - intersectionPos;
-			float distanceToLight = length(dirToLight);
-			dirToLight /= distanceToLight;
+				vec3 dirToLight = lightPosSample - intersectionPos;
+				float distanceToLight = length(dirToLight);
+				dirToLight /= distanceToLight;
 
-			//check visibility:
-			float cos_theta_i = dot(dirToLight, intersectionNormal);
-			//Normal culling at surface
-			if (cos_theta_i > 0.0f) {
-				RTCRay shadowRay;
-				if (!scene->surfaceOccluded(intersectionPos + Constants::epsilon * intersectionNormal, dirToLight, distanceToLight - Constants::epsilon, shadowRay)) {
-					float cos_theta_j = dot(-dirToLight, scene->lightSource->normal);
-					//normal culling at light
-					if (scene->lightSource->validHitDirection(dirToLight)) {
-		
-						double lightSamplingPDF = scene->lightSource->getPositionSamplingPDF();
+				//check visibility:
+				float cos_theta_i = dot(dirToLight, intersectionNormal);
+				//Normal culling at surface
+				if (bsdfData->validOutputDirection(intersectionNormal, dirToLight)) {
+					RTCRay shadowRay;
+					if (!scene->vertexOccluded(intersectionPos + Constants::epsilon * intersectionNormal, dirToLight, distanceToLight - Constants::epsilon, shadowRay)) {
+						float cos_theta_j = dot(-dirToLight, sampledLightSource->normal);
+						//normal culling at light
+						if (sampledLightSource->validHitDirection(dirToLight)) {
 
-						//calculate GTerm
-						float G_NEE = cos_theta_j / (distanceToLight * distanceToLight);
-						assert(G_NEE > 0.0f);
-						if (isfinite(G_NEE)) {
-							double brdfDirSamplingPDF = diffuseBRDFSamplingPDF(intersectionNormal, dirToLight);
-							assert(brdfDirSamplingPDF > 0.0);
-							double misWeight = misPowerWeight(lightSamplingPDF, brdfDirSamplingPDF * G_NEE);
+							double lightSamplingPDF = scene->getLightVertexSamplingPDF(intersectionPos, sampledLightIndex);
 
-							//update Measurement contrib and PDf for this path using NEE:
-							vec3 neeMeasurementContrib = measurementContrib * evalDiffuseBRDF(surfaceData.albedo) * cos_theta_i * G_NEE;
-							float pdfNEE = (float)(pdf * lightSamplingPDF);
+							//calculate GTerm
+							float G_NEE = cos_theta_j / (distanceToLight * distanceToLight);
+							assert(G_NEE > 0.0f);
+							if (isfinite(G_NEE)) {
+								double brdfDirSamplingPDF = bsdfData->getBSDFDirectionPDF(intersectionNormal, dirToLight, currDir); 
+								//assert(brdfDirSamplingPDF > 0.0);
+								double misWeight = misPowerWeight(lightSamplingPDF, brdfDirSamplingPDF * G_NEE);
 
-							if (isfinite(pdfNEE)) {
-								assert(isfinite(pdfNEE));
+								//update Measurement contrib and PDf for this path using NEE:
+								vec3 neeMeasurementContrib = measurementContrib * bsdfData->evalBSDF(intersectionNormal, dirToLight, currDir) * G_NEE;
+								float pdfNEE = (float)(pdf * lightSamplingPDF);
 
-								vec3 neeThroughput = neeMeasurementContrib / pdfNEE;
-								if (isfinite(neeThroughput.x)) {
-									assert(isfinite(neeThroughput.x));
-									finalPixel += (float)misWeight * neeThroughput * scene->lightSource->Le;
+								if (isfinite(pdfNEE)) {
+									assert(isfinite(pdfNEE));
+
+									vec3 neeThroughput = neeMeasurementContrib / pdfNEE;
+									if (isfinite(neeThroughput.x)) {
+										assert(isfinite(neeThroughput.x));
+										finalPixel += (float)misWeight * neeThroughput * sampledLightSource->getEmissionIntensity(lightPosSample, dirToLight);
+									}
+									else {
+										cout << "throughput infinite?" << endl;
+									}
 								}
 								else {
-									cout << "throughput infinite?" << endl;
+									cout << "PDF overflow?" << endl;
 								}
-							}
-							else {
-								cout << "PDF overflow?" << endl;
 							}
 						}
 					}
 				}
-			}
-			else {
-				//cout << "normal culling at surface" << endl;
+				else {
+					//cout << "normal culling at surface" << endl;
+				}
 			}
 			/////////////////////////
 			// Sample BRDF
 			/////////////////////////
 
 			//sample new direction:
-			vec3 newDir = sampleDiffuseBRDFDir(intersectionNormal, sample1D(threadID), sample1D(threadID));
-			float cos_theta = dot(intersectionNormal, newDir);
-
-			if (cos_theta <= 0.0f) {
+			vec3 newDir = bsdfData->sampleBSDFDirection(intersectionNormal, currDir, sample1D(threadID), sample1D(threadID)); 
+			if (!bsdfData->validOutputDirection(intersectionNormal, newDir)) {
 				break;
 			}
-			assert(cos_theta > 0.0f);
+
 
 			//update PDF and measurement contrib:
-			lastDirSamplingPDF = diffuseBRDFSamplingPDF(intersectionNormal, newDir);
+			lastDirSamplingPDF = bsdfData->getBSDFDirectionPDF(intersectionNormal, newDir, currDir);
 
 			if (lastDirSamplingPDF == 0.0) {
 				//invalid sampling!
 				break;
 			}
 
-			pdf *= lastDirSamplingPDF;	
+			pdf *= lastDirSamplingPDF;
 
-			measurementContrib *= evalDiffuseBRDF(surfaceData.albedo) * cos_theta;
+			measurementContrib *= bsdfData->evalBSDF(intersectionNormal, newDir, currDir); 
 
 			currNormal = intersectionNormal;
 			currPosition = intersectionPos + Constants::epsilon * intersectionNormal;
@@ -732,11 +732,13 @@ vec3 VolumeRenderer::pathTracingRandomWalk(const vec3& rayOrigin, const vec3& ra
 				vec3 intersectionPos = currPosition + ray.tfar * currDir;
 
 				//check if light was hit:
-				if (scene->lightSource->lightIntersected(intersectionPos)) {
-					float cosThetaLight = dot(-currDir, scene->lightSource->normal);
+				int hitLightSourceIndex;
+				if (scene->lightIntersected(intersectionPos, &hitLightSourceIndex)) {
+					LightSource* hitLight = scene->lightSources[hitLightSourceIndex];
+					float cosThetaLight = dot(-currDir, hitLight->normal);
 
 					//Normal culling at light source
-					if (scene->lightSource->validHitDirection(currDir)) {
+					if (hitLight->validHitDirection(currDir)) {
 						double transmittance = exp(-medium.mu_t * ray.tfar);
 						double GLight = (double)cosThetaLight / ((double)ray.tfar * (double)ray.tfar);
 						assert(isfinite(GLight));
@@ -749,7 +751,7 @@ vec3 VolumeRenderer::pathTracingRandomWalk(const vec3& rayOrigin, const vec3& ra
 						double finalContribution = measurementContrib / pdf;
 						assert(isfinite(finalContribution));
 
-						finalValue = (float)finalContribution * colorThroughput * scene->lightSource->Le;
+						finalValue = (float)finalContribution * colorThroughput * hitLight->getEmissionIntensity(intersectionPos, currDir);
 					}
 					break;
 				}
@@ -764,21 +766,19 @@ vec3 VolumeRenderer::pathTracingRandomWalk(const vec3& rayOrigin, const vec3& ra
 				// Sample BRDF
 				/////////////////////////
 				//diffuse surface was hit: get objectData
-				ObjectData surfaceData;
-				scene->getObjectData(ray.geomID, &surfaceData);
+				BSDF* bsdfData = scene->getBSDF(ray.geomID);
 
 				//sample new direction:
-				vec3 newDir = sampleDiffuseBRDFDir(intersectionNormal, sample1D(threadID), sample1D(threadID));
-				float cos_theta = dot(intersectionNormal, newDir);
-				if (cos_theta <= 0.0f) {
+				vec3 newDir = bsdfData->sampleBSDFDirection(intersectionNormal, currDir, sample1D(threadID), sample1D(threadID)); 
+				if (!bsdfData->validOutputDirection(intersectionNormal, newDir)) {
 					break;
 				}
 
 				//update mc and pdf:
 				double transmittance = exp(-medium.mu_t * ray.tfar);
-				colorThroughput *= evalDiffuseBRDF(surfaceData.albedo);
-				measurementContrib *= transmittance * (double)cos_theta;
-				pdf *= transmittance * diffuseBRDFSamplingPDF(intersectionNormal, newDir);
+				colorThroughput *= bsdfData->evalBSDF(intersectionNormal, newDir, currDir);
+				measurementContrib *= transmittance;
+				pdf *= transmittance * bsdfData->getBSDFDirectionPDF(intersectionNormal, newDir, currDir);
 
 				currPosition = intersectionPos + Constants::epsilon * intersectionNormal;
 				currDir = newDir;
@@ -839,17 +839,19 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 		RTCRay ray;
 		vec3 intersectionNormal;
 		if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal) && ray.tfar <= freePathLength) {
-			if (ray.tfar > Constants::epsilon) {				
+			if (ray.tfar > Constants::epsilon) {
 
 				//surface interaction
 				vec3 intersectionPos = currPosition + ray.tfar * currDir;
 
 				//check if light was hit:
-				if (scene->lightSource->lightIntersected(intersectionPos)) {
-					float cosThetaLight = dot(-currDir, scene->lightSource->normal);
+				int hitLightIndex;
+				if (scene->lightIntersected(intersectionPos, &hitLightIndex)) {
+					LightSource* hitLightSource = scene->lightSources[hitLightIndex];
+					float cosThetaLight = dot(-currDir, hitLightSource->normal);
 
 					//Normal culling at light source
-					if (scene->lightSource->validHitDirection(currDir)) {
+					if (hitLightSource->validHitDirection(currDir)) {
 						double transmittance = exp(-medium.mu_t * ray.tfar);
 						double GLight = (double)cosThetaLight / ((double)ray.tfar * (double)ray.tfar);
 						assert(isfinite((float)GLight));
@@ -862,15 +864,15 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 						double finalContribution = measurementContrib / pdf;
 						assert(isfinite(finalContribution));
 
-						//double pathTracingPDF = lastDirSamplingPDF * GLight;
 						//contribute distance sampling!
 						double pathTracingPDF = lastDirSamplingPDF * GLight * transmittance;
 						double misWeight = 1.0;
 						if (currSegmentLength > 0.0) {
-							misWeight = misPowerWeight(pathTracingPDF, scene->lightSource->getPositionSamplingPDF());
+							double lightVertexSamplingPDF = scene->getLightVertexSamplingPDF(currPosition, hitLightIndex);
+							misWeight = misPowerWeight(pathTracingPDF, lightVertexSamplingPDF);
 						}
 
-						finalValue += (float)(misWeight * finalContribution) * colorThroughput * scene->lightSource->Le;
+						finalValue += (float)(misWeight * finalContribution) * colorThroughput * hitLightSource->getEmissionIntensity(intersectionPos, currDir);
 					}
 					break;
 				}
@@ -886,8 +888,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 				}
 
 				//diffuse surface was hit: get objectData
-				ObjectData surfaceData;
-				scene->getObjectData(ray.geomID, &surfaceData);
+				BSDF* bsdfData = scene->getBSDF(ray.geomID);
 
 				//update transmittance up to current position
 				double transmittance = exp(-medium.mu_t * ray.tfar);
@@ -897,56 +898,56 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 				/////////////////////////
 				// NEE 
 				/////////////////////////
-				vec3 lightSample = scene->lightSource->sampleLightPosition(sample1D(threadID), sample1D(threadID));
-				vec3 isecToLight = lightSample - intersectionPos;
-				float distToLight = length(isecToLight);
-				vec3 dirToLight = isecToLight / distToLight;
+				int sampledLightIndex;
+				vec3 lightSample = scene->sampleLightPosition(intersectionPos, sample1D(threadID), sample1D(threadID), sample1D(threadID), &sampledLightIndex);
+				if (sampledLightIndex > -1) {
+					LightSource* sampledLight = scene->lightSources[sampledLightIndex];
+					vec3 isecToLight = lightSample - intersectionPos;
+					float distToLight = length(isecToLight);
+					vec3 dirToLight = isecToLight / distToLight;
 
-				float cosTheta = dot(intersectionNormal, dirToLight);
-				//normal culling at surface
-				if (cosTheta > 0.0f && distToLight > Constants::epsilon) {
-					RTCRay shadowRay;
-					if (!scene->surfaceOccluded(intersectionPos + Constants::epsilon * intersectionNormal, dirToLight, distToLight - Constants::epsilon, shadowRay)) {
-						double pathTracingPDF = diffuseBRDFSamplingPDF(intersectionNormal, dirToLight);
-						float cosThetaLight = dot(-dirToLight, scene->lightSource->normal);
-						//normal culling at light
-						if (scene->lightSource->validHitDirection(dirToLight)) {
-							double GLight = (double)cosThetaLight / ((double)distToLight * (double)distToLight);
-							double neeTransmittance = exp(-medium.mu_t * (double)distToLight);
-							//pathTracingPDF *= GLight;
+					//normal culling at surface
+					if (bsdfData->validOutputDirection(intersectionNormal, dirToLight) && distToLight > Constants::epsilon) {
+						RTCRay shadowRay;
+						if (!scene->vertexOccluded(intersectionPos + Constants::epsilon * intersectionNormal, dirToLight, distToLight - Constants::epsilon, shadowRay)) {
+							double pathTracingPDF = bsdfData->getBSDFDirectionPDF(intersectionNormal, dirToLight, currDir);
+							float cosThetaLight = dot(-dirToLight, sampledLight->normal);
+							//normal culling at light
+							if (sampledLight->validHitDirection(dirToLight)) {
+								double GLight = (double)cosThetaLight / ((double)distToLight * (double)distToLight);
+								double neeTransmittance = exp(-medium.mu_t * (double)distToLight);
 
-							//contribute distance sampling!
-							pathTracingPDF *= GLight * neeTransmittance;
+								//contribute distance sampling!
+								pathTracingPDF *= GLight * neeTransmittance;
 
-							double misWeight = misPowerWeight(scene->lightSource->getPositionSamplingPDF(), pathTracingPDF);
+								double lightVertexSamplingPDF = scene->getLightVertexSamplingPDF(intersectionPos, sampledLightIndex);
+								double misWeight = misPowerWeight(lightVertexSamplingPDF, pathTracingPDF);
 
-							vec3 neeColorThroughput = colorThroughput * evalDiffuseBRDF(surfaceData.albedo);
-							double neeMeasurementContrib = measurementContrib * (double)cosTheta * neeTransmittance * GLight;
-							double neePDF = pdf * scene->lightSource->getPositionSamplingPDF();
+								vec3 neeColorThroughput = colorThroughput * bsdfData->evalBSDF(intersectionNormal, dirToLight, currDir);
+								double neeMeasurementContrib = measurementContrib * neeTransmittance * GLight;
+								double neePDF = pdf * lightVertexSamplingPDF;
 
-							double finalContribution = misWeight * (neeMeasurementContrib / neePDF);
-							assert(isfinite(finalContribution));
+								double finalContribution = misWeight * (neeMeasurementContrib / neePDF);
+								assert(isfinite(finalContribution));
 
-							finalValue += (float)finalContribution * neeColorThroughput * scene->lightSource->Le;
+								finalValue += (float)finalContribution * neeColorThroughput * sampledLight->getEmissionIntensity(lightSample, dirToLight);
+							}
 						}
 					}
 				}
-
 				/////////////////////////
 				// Sample BRDF
 				/////////////////////////				
 
 				//sample new direction:
-				vec3 newDir = sampleDiffuseBRDFDir(intersectionNormal, sample1D(threadID), sample1D(threadID));
-				float cos_theta = dot(intersectionNormal, newDir);
-				if (cos_theta <= 0.0f) {
+				vec3 newDir = bsdfData->sampleBSDFDirection(intersectionNormal, currDir, sample1D(threadID), sample1D(threadID)); 
+				if (!bsdfData->validOutputDirection(intersectionNormal, newDir)) {
 					break;
 				}
 
 				//update mc and pdf:
-				colorThroughput *= evalDiffuseBRDF(surfaceData.albedo);
-				measurementContrib *= (double)cos_theta;
-				lastDirSamplingPDF = diffuseBRDFSamplingPDF(intersectionNormal, newDir);
+				colorThroughput *= bsdfData->evalBSDF(intersectionNormal, newDir, currDir);
+				lastDirSamplingPDF = bsdfData->getBSDFDirectionPDF(intersectionNormal, newDir, currDir);
 				pdf *= lastDirSamplingPDF;
 
 				currPosition = intersectionPos + Constants::epsilon * intersectionNormal;
@@ -978,44 +979,48 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 			/////////////////////////
 			// NEE in Medium
 			/////////////////////////
-			vec3 lightSample = scene->lightSource->sampleLightPosition(sample1D(threadID), sample1D(threadID));
-			vec3 posToLight = lightSample - nextPosition;
-			float distToLight = length(posToLight);
-			vec3 dirToLight = posToLight / distToLight;
+			int sampledLightIndex;
+			vec3 lightSample = scene->sampleLightPosition(nextPosition, sample1D(threadID), sample1D(threadID), sample1D(threadID), &sampledLightIndex);
+			if (sampledLightIndex > -1) {
+				LightSource* sampledLightSource = scene->lightSources[sampledLightIndex];
+				vec3 posToLight = lightSample - nextPosition;
+				float distToLight = length(posToLight);
+				vec3 dirToLight = posToLight / distToLight;
 
-			if (distToLight > Constants::epsilon) {
-				RTCRay shadowRay;
-				//check visibility:
-				if (!scene->surfaceOccluded(nextPosition, dirToLight, distToLight, shadowRay)) {
+				if (distToLight > Constants::epsilon) {
+					RTCRay shadowRay;
+					//check visibility:
+					if (!scene->vertexOccluded(nextPosition, dirToLight, distToLight, shadowRay)) {
 
-					float cosTheta = dot(currDir, dirToLight);
-					double neePhase = (double)henyeyGreenstein(cosTheta, medium.hg_g_F);
-					double pathTracingPDF = neePhase;
-					float cosThetaLight = dot(-dirToLight, scene->lightSource->normal);
-					//normal culling at light
-					if (scene->lightSource->validHitDirection(dirToLight)) {
-						double GLight = cosThetaLight / ((double)distToLight * (double)distToLight);
-						double neeTransmittance = exp(-medium.mu_t * (double)distToLight);
-						//pathTracingPDF *= GLight;
+						float cosTheta = dot(currDir, dirToLight);
+						double neePhase = (double)henyeyGreenstein(cosTheta, medium.hg_g_F);
+						double pathTracingPDF = neePhase;
+						float cosThetaLight = dot(-dirToLight, sampledLightSource->normal);
+						//normal culling at light
+						if (sampledLightSource->validHitDirection(dirToLight)) {
+							double GLight = cosThetaLight / ((double)distToLight * (double)distToLight);
+							double neeTransmittance = exp(-medium.mu_t * (double)distToLight);
 
-						//contribute transmittance:
-						pathTracingPDF *= GLight * neeTransmittance;
+							//contribute transmittance:
+							pathTracingPDF *= GLight * neeTransmittance;
 
-						double misWeight = misPowerWeight(scene->lightSource->getPositionSamplingPDF(), pathTracingPDF);
+							double lightVertexSamplingPDF = scene->getLightVertexSamplingPDF(nextPosition, sampledLightIndex);
 
-						double neeMeasurementContrib = measurementContrib * medium.mu_s * neePhase * neeTransmittance * GLight;
-						double neePDF = pdf * scene->lightSource->getPositionSamplingPDF();
-						assert(isfinite(neePDF));
-						assert(neePDF > 0.0f);
+							double misWeight = misPowerWeight(lightVertexSamplingPDF, pathTracingPDF);
 
-						double finalContribution = misWeight * (neeMeasurementContrib / neePDF);
-						assert(isfinite(finalContribution));
+							double neeMeasurementContrib = measurementContrib * medium.mu_s * neePhase * neeTransmittance * GLight;
+							double neePDF = pdf * lightVertexSamplingPDF;
+							assert(isfinite(neePDF));
+							assert(neePDF > 0.0f);
 
-						finalValue += (float)finalContribution * colorThroughput * scene->lightSource->Le;
+							double finalContribution = misWeight * (neeMeasurementContrib / neePDF);
+							assert(isfinite(finalContribution));
+
+							finalValue += (float)finalContribution * colorThroughput * sampledLightSource->getEmissionIntensity(lightSample, dirToLight);
+						}
 					}
 				}
 			}
-
 			/////////////////////////
 			// sample new direction
 			/////////////////////////
@@ -1024,7 +1029,7 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 			float cos_theta = dot(currDir, newDir);
 			float phase = henyeyGreenstein(cos_theta, medium.hg_g_F);
 			lastDirSamplingPDF = (double)phase;
-			
+
 			//update mc and pdf:
 			measurementContrib *= medium.mu_s * (double)phase;
 			pdf *= (double)phase;
@@ -1050,9 +1055,10 @@ vec3 VolumeRenderer::pathTracing_NEE_MIS(const vec3& rayOrigin, const vec3& rayD
 * @param estimatorIndex index of the estimator that created the path:
 *			estimatorIndex = 0: path tracing
 *			estimatorIndex > 0: MVNEE starting after i path tracing segments
+* @param lightSourceIndex index of the light source, that this path ends on
 * @return: the MIS weighted contribution of the path
 */
-vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorIndex)
+vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorIndex, int lightSourceIndex)
 {
 	const int segmentCount = path->getSegmentLength();
 	assert(path->getVertexCount() >= 2);
@@ -1060,6 +1066,8 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 	assert(estimatorIndex >= 0);
 	assert(estimatorIndex < segmentCount);
 	vec3 errorValue(0.0f); //returned in case of errors
+
+	LightSource* hitLightSource = scene->lightSources[lightSourceIndex];
 
 	//get thread local pre-reservers data for this thread:
 	int threadID = omp_get_thread_num();
@@ -1070,6 +1078,9 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 
 	double measurementContrib = 1.0;
 	double pathTracingPDF = 1.0;
+
+	vec3 lastDirection;
+	vec3 lightVertex = path->getVertexPosition(segmentCount);
 
 	vec3 colorThroughput = vec3(1.0f, 1.0f, 1.0f);
 
@@ -1108,8 +1119,8 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 	//special case: light was immediately hit after 1 segment:
 	if (path->getVertexCount() == 2) {		
 		//Normal culling
-		if (scene->lightSource->validHitDirection(startDir)) {
-			return scene->lightSource->Le;
+		if (hitLightSource->validHitDirection(startDir)) {
+			return hitLightSource->getEmissionIntensity(secondVertex.vertex, startDir);
 		} 
 		return errorValue;		
 	}
@@ -1145,11 +1156,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 		path->getVertex(i - 1, prevVert);
 		vec3 currentDir = currVert.vertex - prevVert.vertex;
 		float currentDistance = length(currentDir);
-		//if (currentDistance < Constants::epsilon) {
-		//	//very small distance -> maybe this will become a problem later!
-		//	cout << "very small distance!" << endl;
-		//	return errorValue;
-		//}
+
 		if (currentDistance <= 0.0f) {			
 			return errorValue;
 		}
@@ -1162,19 +1169,17 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 		//contribute phase function * mu_s / BRDF depending on vertex
 		if (prevVert.vertexType == TYPE_SURFACE) {
 			//BRDF direction
-			ObjectData surfaceData;
-			scene->getObjectData(prevVert.geometryID, &surfaceData);
 
-			float cosThetaBRDF = dot(prevVert.surfaceNormal, currentDir);
-			if (cosThetaBRDF <= 0.0f) {
-				cout << "wrong outgoing direction at surface!: cosTheta = " << cosThetaBRDF << endl;
+			BSDF* bsdfData = scene->getBSDF(prevVert.geometryID);
+
+			if (!bsdfData->validOutputDirection(prevVert.surfaceNormal, currentDir)) {
+				cout << "wrong outgoing direction at surface!" << endl; 
 				return errorValue;
 			}
-			assert(cosThetaBRDF > 0.0f);
 
-			colorThroughput *= evalDiffuseBRDF(surfaceData.albedo);
-			measurementContrib *= (double)cosThetaBRDF;
-			pathTracingPDF *= diffuseBRDFSamplingPDF(prevVert.surfaceNormal, currentDir);
+
+			colorThroughput *= bsdfData->evalBSDF(prevVert.surfaceNormal, currentDir, previousDir);
+			pathTracingPDF *= bsdfData->getBSDFDirectionPDF(prevVert.surfaceNormal, currentDir, previousDir);
 		}
 		else {
 			//phase direction
@@ -1187,9 +1192,11 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 				
 		if (i == segmentCount) {
 			//Light connection segment:
-			if (scene->lightSource->validHitDirection(currentDir)) {
+			if (hitLightSource->validHitDirection(currentDir)) {
+				lastDirection = currentDir;
+
 				//special treatment when light source was hit:
-				float cosLightF = dot(-currentDir, scene->lightSource->normal);
+				float cosLightF = dot(-currentDir, hitLightSource->normal);
 				assert(cosLightF >= 0.0f);
 				currG *= (double)cosLightF;
 
@@ -1239,8 +1246,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 	//////////////////////////////////////
 	for (int e = firstPossibleMVNEEEstimatorIndex; e < segmentCount; e++) {
 		double pathTracingStartPDF = tl_cumulatedPathTracingPDFs[e]; //pdf for sampling the first vertices with path tracing
-		vec3 forkVertex = path->getVertexPosition(e); //last path tracing vertex and anchor point for the mvnee path
-		vec3 lightVertex = path->getVertexPosition(segmentCount);
+		vec3 forkVertex = path->getVertexPosition(e); //last path tracing vertex and anchor point for the mvnee path		
 
 		vec3 forkToLight = lightVertex - forkVertex;
 		float distanceToLight = length(forkToLight);
@@ -1344,7 +1350,8 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 						//contribute sampling for last segment: pdf for sampling distance >= distance to Light!
 						perturbationPDF *= exp(-medium.mu_t * (double)lastSeedSegmentLength);
 
-						double finalEstimatorPDF = pathTracingStartPDF * scene->lightSource->getPositionSamplingPDF() * perturbationPDF;
+						double lightVertexSamplingPDF = scene->getLightVertexSamplingPDF(forkVertex, lightSourceIndex);
+						double finalEstimatorPDF = pathTracingStartPDF * lightVertexSamplingPDF * perturbationPDF;
 						if (isfinite(finalEstimatorPDF)) {
 							tl_estimatorPDFs[e] = finalEstimatorPDF;
 						}
@@ -1381,7 +1388,7 @@ vec3 VolumeRenderer::calcFinalWeightedContribution(Path* path, int estimatorInde
 
 			const int estimatorCount = segmentCount;
 			float misWeight = misPowerWeight(finalPDF, tl_estimatorPDFs, estimatorCount);
-			vec3 finalPixel = misWeight * finalContribution * colorThroughput * scene->lightSource->Le;
+			vec3 finalPixel = misWeight * finalContribution * colorThroughput * hitLightSource->getEmissionIntensity(lightVertex, lastDirection);
 			return finalPixel;
 		}
 	}
@@ -1437,7 +1444,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 		RTCRay ray;
 		vec3 intersectionNormal;
 		if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal) && ray.tfar <= freePathLength) {
-			if (ray.tfar > Constants::epsilon) {				
+			if (ray.tfar > Constants::epsilon) {
 
 				//////////////////////////////
 				// Surface interaction
@@ -1449,22 +1456,24 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 				forkVertex.surfaceNormal = intersectionNormal;
 				pathTracingPath->addVertex(forkVertex);
 
-				if (scene->lightSource->lightIntersected(surfaceVertex)) {
+				int hitLightIndex;
+				if (scene->lightIntersected(surfaceVertex, &hitLightIndex)) {
 					//////////////////////////////
 					// Light hit
 					//////////////////////////////
+					LightSource* hitLight = scene->lightSources[hitLightIndex];
 
 					//normal culling
-					if (scene->lightSource->validHitDirection(currDir)) {
+					if (hitLight->validHitDirection(currDir)) {
 						//estimator Index for Path tracing is 0!
 						vec3 finalContribution;
 						if (pathTracingPath->getSegmentLength() > 1) {
-							finalContribution = calcFinalWeightedContribution(pathTracingPath, 0);
+							finalContribution = calcFinalWeightedContribution(pathTracingPath, 0, hitLightIndex);
 						}
 						else {
-							finalContribution = scene->lightSource->Le;
+							finalContribution = hitLight->getEmissionIntensity(surfaceVertex, currDir);
 						}
-						
+
 						finalPixel += finalContribution;
 					}
 					break;
@@ -1475,8 +1484,12 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 					break;
 				}
 
+				BSDF* bsdfData = scene->getBSDF(ray.geomID);
 				//sample direction based on BRDF:
-				vec3 newDir = sampleDiffuseBRDFDir(intersectionNormal, sample1D(threadID), sample1D(threadID));
+				vec3 newDir = bsdfData->sampleBSDFDirection(intersectionNormal, currDir, sample1D(threadID), sample1D(threadID)); 
+				if (!bsdfData->validOutputDirection(intersectionNormal, newDir)) {
+					break;
+				}
 
 				//update variables:
 				currPosition = surfaceVertex + Constants::epsilon * intersectionNormal;
@@ -1515,175 +1528,179 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 		// MVNEE
 		//////////////////////////////		
 
-		//first sample a light vertex
-		vec3 lightVertex = scene->lightSource->sampleLightPosition(sample1D(threadID), sample1D(threadID));
-		vec3 forkToLight = lightVertex - forkVertex.vertex;
-		float distanceToLight = length(forkToLight);
-		if (distanceToLight > Constants::epsilon) {
+		//first sample a light vertex on a chosen light source
+		int sampledLightIndex;
+		vec3 lightVertex = scene->sampleLightPosition(forkVertex.vertex, sample1D(threadID), sample1D(threadID), sample1D(threadID), &sampledLightIndex);
+		if (sampledLightIndex > -1) {
+			LightSource* sampledLightSource = scene->lightSources[sampledLightIndex];
+			vec3 forkToLight = lightVertex - forkVertex.vertex;
+			float distanceToLight = length(forkToLight);
+			if (distanceToLight > Constants::epsilon) {
 
-			//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
-			float expectedSegments = distanceToLight / medium.meanFreePathF;
-			if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
-			
-				vec3 omega = forkToLight / distanceToLight; //direction of the line to the light source
+				//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
+				float expectedSegments = distanceToLight / medium.meanFreePathF;
+				if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
 
-				vec3 u, v;
-				coordinateSystem(omega, u, v); //build tangent frame: (same for every seed vertex)
+					vec3 omega = forkToLight / distanceToLight; //direction of the line to the light source
 
-				//sample the segment lengths for the seed path:
-				int mvneeSegmentCount;
+					vec3 u, v;
+					coordinateSystem(omega, u, v); //build tangent frame: (same for every seed vertex)
 
-				bool validPath = sampleSeedSegmentLengths(distanceToLight, tl_seedSegmentLengths, &mvneeSegmentCount, threadID);
+					//sample the segment lengths for the seed path:
+					int mvneeSegmentCount;
 
-				//special case: surface normal culling for only one segment:
-				if (validPath && mvneeSegmentCount == 1) {
-					if (forkVertex.vertexType == TYPE_SURFACE) {
-						float cosThetaSurface = dot(omega, forkVertex.surfaceNormal);
-						if (cosThetaSurface <= 0.0f) {
+					bool validPath = sampleSeedSegmentLengths(distanceToLight, tl_seedSegmentLengths, &mvneeSegmentCount, threadID);
+
+					//special case: surface normal culling for only one segment:
+					if (validPath && mvneeSegmentCount == 1) {
+						if (forkVertex.vertexType == TYPE_SURFACE) {
+							float cosThetaSurface = dot(omega, forkVertex.surfaceNormal);
+							if (cosThetaSurface <= 0.0f) {
+								validPath = false;
+							}
+						}
+						//light normal culling!
+						if (!sampledLightSource->validHitDirection(omega)) {
 							validPath = false;
 						}
 					}
-					//light normal culling!
-					if (!scene->lightSource->validHitDirection(omega)) {
-						validPath = false;
-					}
-				}
 
-				if (validPath && mvneeSegmentCount > 0) {
-					//consider max segment length:
-					if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= rendering.MAX_SEGMENT_COUNT) {
+					if (validPath && mvneeSegmentCount > 0) {
+						//consider max segment length:
+						if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= rendering.MAX_SEGMENT_COUNT) {
 
-						//determine seed vertices based on sampled segment lengths:
-						vec3 prevVertex = forkVertex.vertex;
-						for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
-							vec3 newSeedVertex = prevVertex + tl_seedSegmentLengths[s] * omega;
-							tl_seedVertices[s] = newSeedVertex;
-							prevVertex = newSeedVertex;
-						}
-						//add light vertex
-						tl_seedVertices[mvneeSegmentCount - 1] = lightVertex;
-
-						////////////////////////////
-						//  perturb all vertices but the lightDiskVertex:
-						////////////////////////////
-						vec3 previousPerturbedVertex = forkVertex.vertex;
-						
-						vec3 seedVertex;
-						vec3 perturbedVertex;
-						bool validMVNEEPath = true;
-						for (int p = 0; p < (mvneeSegmentCount - 1); p++) {
-							seedVertex = tl_seedVertices[p];
-
-							//sanity check: distances to start and end may not be <= 0
-							float distanceToLineEnd = length(lightVertex - seedVertex);
-							float distanceToLineStart = length(seedVertex - forkVertex.vertex);
-							if (distanceToLineEnd <= 0.0f || distanceToLineStart <= 0.0f) {
-								validMVNEEPath = false;
-								break;
+							//determine seed vertices based on sampled segment lengths:
+							vec3 prevVertex = forkVertex.vertex;
+							for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
+								vec3 newSeedVertex = prevVertex + tl_seedSegmentLengths[s] * omega;
+								tl_seedVertices[s] = newSeedVertex;
+								prevVertex = newSeedVertex;
 							}
+							//add light vertex
+							tl_seedVertices[mvneeSegmentCount - 1] = lightVertex;
 
-							// calculate sigma for perturbation: first convolution formula:
-							double leftSideFactor = 0.0;
-							for (int x = 0; x <= p; x++) {
-								leftSideFactor += ((double)tl_seedSegmentLengths[x] * (double)tl_seedSegmentLengths[x]);
-							}
-							leftSideFactor = sqrt(leftSideFactor);
-							assert(leftSideFactor > 0.0f);
-							double rightSideFactor = 0.0;
-							for (int x = p + 1; x < mvneeSegmentCount; x++) {
-								rightSideFactor += ((double)tl_seedSegmentLengths[x] * (double)tl_seedSegmentLengths[x]);
-							}
-							rightSideFactor = sqrt(rightSideFactor);
-							assert(rightSideFactor > 0.0f);
+							////////////////////////////
+							//  perturb all vertices but the lightDiskVertex:
+							////////////////////////////
+							vec3 previousPerturbedVertex = forkVertex.vertex;
 
-							double sigma = calcGaussProduct(leftSideFactor * sigmaForHG, rightSideFactor * sigmaForHG);
-							double finalGGXAlpha = sigma * 1.637618734; //conversion with Constants factor
+							vec3 seedVertex;
+							vec3 perturbedVertex;
+							bool validMVNEEPath = true;
+							for (int p = 0; p < (mvneeSegmentCount - 1); p++) {
+								seedVertex = tl_seedVertices[p];
 
-							//perform perturbation using ggx radius and uniform angle in u,v plane 
-							perturbVertexGGX2D(finalGGXAlpha, u, v, seedVertex, &perturbedVertex, threadID);
-							
-							float maxT = tl_seedSegmentLengths[p];
+								//sanity check: distances to start and end may not be <= 0
+								float distanceToLineEnd = length(lightVertex - seedVertex);
+								float distanceToLineStart = length(seedVertex - forkVertex.vertex);
+								if (distanceToLineEnd <= 0.0f || distanceToLineStart <= 0.0f) {
+									validMVNEEPath = false;
+									break;
+								}
 
-							//for first perturbed vertex, check if perturbation violates the normal culling condition on the surface!
-							if (p == 0 && forkVertex.vertexType == TYPE_SURFACE) {
-								vec3 forkToFirstPerturbed = perturbedVertex - forkVertex.vertex;
-								float firstDistToPerturbed = length(forkToFirstPerturbed);
-								//if (firstDistToPerturbed >= Constants::epsilon) {
-								if (firstDistToPerturbed > 0.0f) {
-									forkToFirstPerturbed /= firstDistToPerturbed;
-									float cosThetaSurface = dot(forkToFirstPerturbed, forkVertex.surfaceNormal);
-									if (cosThetaSurface <= 0.0f) {
+								// calculate sigma for perturbation: first convolution formula:
+								double leftSideFactor = 0.0;
+								for (int x = 0; x <= p; x++) {
+									leftSideFactor += ((double)tl_seedSegmentLengths[x] * (double)tl_seedSegmentLengths[x]);
+								}
+								leftSideFactor = sqrt(leftSideFactor);
+								assert(leftSideFactor > 0.0f);
+								double rightSideFactor = 0.0;
+								for (int x = p + 1; x < mvneeSegmentCount; x++) {
+									rightSideFactor += ((double)tl_seedSegmentLengths[x] * (double)tl_seedSegmentLengths[x]);
+								}
+								rightSideFactor = sqrt(rightSideFactor);
+								assert(rightSideFactor > 0.0f);
+
+								double sigma = calcGaussProduct(leftSideFactor * sigmaForHG, rightSideFactor * sigmaForHG);
+								double finalGGXAlpha = sigma * 1.637618734; //conversion with Constants factor
+
+								//perform perturbation using ggx radius and uniform angle in u,v plane 
+								perturbVertexGGX2D(finalGGXAlpha, u, v, seedVertex, &perturbedVertex, threadID);
+
+								float maxT = tl_seedSegmentLengths[p];
+
+								//for first perturbed vertex, check if perturbation violates the normal culling condition on the surface!
+								if (p == 0 && forkVertex.vertexType == TYPE_SURFACE) {
+									vec3 forkToFirstPerturbed = perturbedVertex - forkVertex.vertex;
+									float firstDistToPerturbed = length(forkToFirstPerturbed);
+									//if (firstDistToPerturbed >= Constants::epsilon) {
+									if (firstDistToPerturbed > 0.0f) {
+										forkToFirstPerturbed /= firstDistToPerturbed;
+										float cosThetaSurface = dot(forkToFirstPerturbed, forkVertex.surfaceNormal);
+										if (cosThetaSurface <= 0.0f) {
+											validMVNEEPath = false;
+											break;
+										}
+									}
+									else {
+										validMVNEEPath = false;
+										break;
+									}
+
+									previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+									maxT -= Constants::epsilon;
+									if (maxT <= 0.0f) {
 										validMVNEEPath = false;
 										break;
 									}
 								}
-								else {
+
+								//visibility check:							
+								vec3 visibilityDirection = normalize(perturbedVertex - previousPerturbedVertex);
+
+								RTCRay shadowRay;
+								if (scene->vertexOccluded(previousPerturbedVertex, visibilityDirection, maxT, shadowRay)) {
 									validMVNEEPath = false;
 									break;
 								}
 
-								previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
-								maxT -= Constants::epsilon;
-								if (maxT <= 0.0f) {
-									validMVNEEPath = false;
-									break;
-								}
+								//add vertex to path
+								pathTracingPath->addMediumVertex(perturbedVertex, TYPE_MVNEE);
+								previousPerturbedVertex = perturbedVertex;
 							}
 
-							//visibility check:							
-							vec3 visibilityDirection = normalize(perturbedVertex - previousPerturbedVertex);
+							if (validMVNEEPath) {
+								vec3 lastSegmentDir = lightVertex - previousPerturbedVertex;
+								float lastSegmentLength = length(lastSegmentDir);
+								if (lastSegmentLength > 0.0f) {
+									lastSegmentDir /= lastSegmentLength;
 
-							RTCRay shadowRay;
-							if (scene->surfaceOccluded(previousPerturbedVertex, visibilityDirection, maxT, shadowRay)) {
-								validMVNEEPath = false;
-								break;
-							}
+									//visibility check: first potential normal culling:
+									if (sampledLightSource->validHitDirection(lastSegmentDir)) {
 
-							//add vertex to path
-							pathTracingPath->addMediumVertex(perturbedVertex, TYPE_MVNEE);
-							previousPerturbedVertex = perturbedVertex;
-						}
+										if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
+											previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+											if (lastSegmentLength - Constants::epsilon > 0.0f) {
+												lastSegmentLength -= Constants::epsilon;
+											}
+										}
 
-						if (validMVNEEPath) {
-							vec3 lastSegmentDir = lightVertex - previousPerturbedVertex;
-							float lastSegmentLength = length(lastSegmentDir);
-							if (lastSegmentLength > 0.0f) {
-								lastSegmentDir /= lastSegmentLength;
 
-								//visibility check: first potential normal culling:
-								if (scene->lightSource->validHitDirection(lastSegmentDir)) {
+										//occlusion check:
+										RTCRay lastShadowRay;
+										if (!scene->vertexOccluded(previousPerturbedVertex, lastSegmentDir, lastSegmentLength, lastShadowRay)) {
+											PathVertex lightVertexStruct(lightVertex, TYPE_MVNEE, -1, sampledLightSource->normal);
+											pathTracingPath->addVertex(lightVertexStruct);
 
-									if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
-										previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;										
-										if (lastSegmentLength - Constants::epsilon > 0.0f) {
-											lastSegmentLength -= Constants::epsilon;
+											//calculate measurement constribution, pdf and mis weight:
+											//estimator Index for MVNEE is index of last path tracing vertex
+											//make sure the last path tracing vertex index is set correctly in order to use the correct PDF
+											vec3 finalContribution = calcFinalWeightedContribution(pathTracingPath, lastPathTracingVertexIndex, sampledLightIndex);
+											finalPixel += finalContribution;
 										}
 									}
-
-
-									//occlusion check:
-									RTCRay lastShadowRay;
-									if (!scene->surfaceOccluded(previousPerturbedVertex, lastSegmentDir, lastSegmentLength, lastShadowRay)) {
-										PathVertex lightVertexStruct(lightVertex, TYPE_MVNEE, -1, scene->lightSource->normal);
-										pathTracingPath->addVertex(lightVertexStruct);
-
-										//calculate measurement constribution, pdf and mis weight:
-										//estimator Index for MVNEE is index of last path tracing vertex
-										//make sure the last path tracing vertex index is set correctly in order to use the correct PDF
-										vec3 finalContribution = calcFinalWeightedContribution(pathTracingPath, lastPathTracingVertexIndex);
-										finalPixel += finalContribution;
-									}
+								}
+								else {
+									cout << "last MVNEE segment length <= 0: " << lastSegmentLength << endl;
 								}
 							}
-							else {
-								cout << "last MVNEE segment length <= 0: " << lastSegmentLength << endl;
-							}
 						}
+						//delete all MVNEE vertices from the path construct, so path racing stays correct
+						pathTracingPath->cutMVNEEVertices();
 					}
-					//delete all MVNEE vertices from the path construct, so path racing stays correct
-					pathTracingPath->cutMVNEEVertices();
-				}
 
+				}
 			}
 		}
 	}
@@ -1710,7 +1727,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE(const vec3& rayOrigin, const vec3& rayDir
 *			estimatorIndex > 0: MVNEE starting after i path tracing segments
 * @return: the MIS weighted contribution of the path
 */
-vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimatorIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput)
+vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimatorIndex, int lightSourceIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput)
 {
 	const int segmentCount = path->getSegmentLength();
 	assert(path->getVertexCount() >= 2);
@@ -1719,9 +1736,16 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 	assert(estimatorIndex < segmentCount);
 	vec3 errorValue(0.0f); //returned in case of errors
 
+	LightSource* hitLightSource = scene->lightSources[lightSourceIndex];
+
+	vec3 lastDirection;
+	vec3 lightVertex = path->getVertexPosition(segmentCount);
+
 	//special case: light was immediately hit after 1 segment:
 	if (path->getVertexCount() == 2) {
-		return scene->lightSource->Le;
+		vec3 firstVertex = path->getVertexPosition(0);
+		vec3 dir = normalize(lightVertex - firstVertex);
+		return hitLightSource->getEmissionIntensity(lightVertex, dir);
 	}
 
 
@@ -1779,19 +1803,15 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 			//contribute phase function * mu_s / BRDF depending on vertex
 			if (prevVert.vertexType == TYPE_SURFACE) {
 				//BRDF direction
-				ObjectData surfaceData;
-				scene->getObjectData(prevVert.geometryID, &surfaceData);
+				BSDF* bsdfData = scene->getBSDF(prevVert.geometryID);
 
-				float cosThetaBRDF = dot(prevVert.surfaceNormal, currentDir);
-				if (cosThetaBRDF <= 0.0f) {
-					cout << "wrong outgoing direction at surface!: cosTheta = " << cosThetaBRDF << endl;
+				if (!bsdfData->validOutputDirection(prevVert.surfaceNormal, currentDir) ) {
+					cout << "wrong outgoing direction at surface!" << endl; 
 					return errorValue;
 				}
-				assert(cosThetaBRDF > 0.0f);
 
-				colorThroughput *= evalDiffuseBRDF(surfaceData.albedo);
-				measurementContrib *= (double)cosThetaBRDF;
-				pathTracingPDF *= diffuseBRDFSamplingPDF(prevVert.surfaceNormal, currentDir);
+				colorThroughput *= bsdfData->evalBSDF(prevVert.surfaceNormal, currentDir, previousDir);
+				pathTracingPDF *= bsdfData->getBSDFDirectionPDF(prevVert.surfaceNormal, currentDir, previousDir);
 			}
 			else {
 				//phase direction
@@ -1804,9 +1824,11 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 
 			if (i == segmentCount) {
 				//Light connection segment:
-				if (scene->lightSource->validHitDirection(currentDir)) {
+				if (hitLightSource->validHitDirection(currentDir)) {
+					lastDirection = currentDir;
+
 					//special treatment when light source was hit:
-					float cosLightF = dot(-currentDir, scene->lightSource->normal);
+					float cosLightF = dot(-currentDir, hitLightSource->normal);
 					assert(cosLightF >= 0.0f);
 					currG *= (double)cosLightF;
 
@@ -1841,6 +1863,10 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 			previousDir = currentDir;
 		}
 	}
+	else {
+		vec3 preLastVertex = path->getVertexPosition(segmentCount - 1);
+		lastDirection = normalize(lightVertex - preLastVertex);
+	}
 
 	//set path tracing pdf at index 0
 	tl_estimatorPDFs[0] = pathTracingPDF;
@@ -1853,7 +1879,6 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 	for (int e = firstPossibleMVNEEEstimatorIndex; e < segmentCount; e++) {
 		double pathTracingStartPDF = tl_cumulatedPathTracingPDFs[e]; //pdf for sampling the first vertices with path tracing
 		vec3 forkVertex = path->getVertexPosition(e); //last path tracing vertex and anchor point for the mvnee path
-		vec3 lightVertex = path->getVertexPosition(segmentCount);
 
 		vec3 forkToLight = lightVertex - forkVertex;
 		float distanceToLight = length(forkToLight);
@@ -1958,7 +1983,9 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 					if (lastSeedSegmentLength >= 0.0f) {
 						perturbationPDF *= exp(-medium.mu_t * (double)distanceToLight);
 
-						double finalEstimatorPDF = pathTracingStartPDF * scene->lightSource->getPositionSamplingPDF() * perturbationPDF;
+						double lightVertexSamplingPDF = scene->getLightVertexSamplingPDF(forkVertex, lightSourceIndex);
+
+						double finalEstimatorPDF = pathTracingStartPDF * lightVertexSamplingPDF * perturbationPDF;
 						if (isfinite(finalEstimatorPDF)) {
 							tl_estimatorPDFs[e] = finalEstimatorPDF;
 						}
@@ -1993,13 +2020,10 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_FINAL(Path* path, int estimat
 		if (isfinite(finalContribution)) {
 			assert(finalContribution >= 0.0);
 
-			//const int estimatorCount = segmentCount;
-			//float misWeight = misPowerWeight(finalPDF, tl_estimatorPDFs, estimatorCount);
-
 			int mvneeEstimatorCount = segmentCount - firstPossibleMVNEEEstimatorIndex;
 			float misWeight = misBalanceWeight(finalPDF, pathTracingPDF, &tl_estimatorPDFs[firstPossibleMVNEEEstimatorIndex], mvneeEstimatorCount);
 
-			vec3 finalPixel = misWeight * finalContribution * colorThroughput * scene->lightSource->Le;
+			vec3 finalPixel = misWeight * finalContribution * colorThroughput * hitLightSource->getEmissionIntensity(lightVertex, lastDirection);
 			return finalPixel;
 		}
 	}
@@ -2081,17 +2105,19 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 				forkVertex.surfaceNormal = intersectionNormal;
 				pathTracingPath->addVertex(forkVertex);
 
-				if (scene->lightSource->lightIntersected(surfaceVertex)) {
+				int hitLightIndex;
+				if (scene->lightIntersected(surfaceVertex, &hitLightIndex)) {
 					//////////////////////////////
 					// Light hit
 					//////////////////////////////
+					LightSource* hitLight = scene->lightSources[hitLightIndex];
 
 					//normal culling
-					if (scene->lightSource->validHitDirection(currDir)) {
+					if (hitLight->validHitDirection(currDir)) {
 
 						//update contribution
 						double transmittance = exp(-medium.mu_t * ray.tfar);
-						float cosThetaLight = dot(-currDir, scene->lightSource->normal);
+						float cosThetaLight = dot(-currDir, hitLight->normal);
 						double G = cosThetaLight / ((double)ray.tfar * (double)ray.tfar);
 						measurementContrib *= transmittance * G;
 						pathTracingPDF *= transmittance * G;
@@ -2100,10 +2126,10 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 						//estimator Index for Path tracing is 0!
 						vec3 finalContribution;
 						if (pathTracingPath->getSegmentLength() > 1) {
-							finalContribution = calcFinalWeightedContribution_FINAL(pathTracingPath, 0, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
+							finalContribution = calcFinalWeightedContribution_FINAL(pathTracingPath, 0, hitLightIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
 						}
 						else {
-							finalContribution = scene->lightSource->Le;
+							finalContribution = hitLight->getEmissionIntensity(surfaceVertex, currDir);
 						}
 
 						finalPixel += finalContribution;
@@ -2115,8 +2141,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 				if (dot(intersectionNormal, -currDir) <= 0.0f) {
 					break;
 				}
-
-
+								
 				//update pdf and mc:
 				double transmittance = exp(-medium.mu_t * ray.tfar);
 				float cosThetaSurface = dot(-currDir, intersectionNormal);
@@ -2129,17 +2154,20 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 				firstPossibleMVNEEEstimatorIndex = pathTracingPath->getSegmentLength();
 
 
+				BSDF* bsdfData = scene->getBSDF(ray.geomID);
 				//sample direction based on BRDF:
-				vec3 newDir = sampleDiffuseBRDFDir(intersectionNormal, sample1D(threadID), sample1D(threadID));
+				vec3 newDir = bsdfData->sampleBSDFDirection(intersectionNormal, currDir, sample1D(threadID), sample1D(threadID)); 
+				if (!bsdfData->validOutputDirection(intersectionNormal, newDir)) {
+					break;
+				}
 
 				//update pdf, measurement contrib and colorThroughput for BRDF-interaction:
-				double dirSamplingPDF = diffuseBRDFSamplingPDF(intersectionNormal, newDir);
-				float cos_theta_surface = dot(intersectionNormal, newDir);
-				newMeasurementContrib = measurementContrib * (double)cos_theta_surface;
+				double dirSamplingPDF = bsdfData->getBSDFDirectionPDF(intersectionNormal, newDir, currDir);
+				newMeasurementContrib = measurementContrib;
 				pathTracingPDF *= dirSamplingPDF;
 				ObjectData surfaceData;
 				scene->getObjectData(ray.geomID, &surfaceData);
-				newColorThroughput = colorThroughput * evalDiffuseBRDF(surfaceData.albedo);
+				newColorThroughput = colorThroughput * bsdfData->evalBSDF(intersectionNormal, newDir, currDir);
 
 				//update variables:
 				currPosition = surfaceVertex + Constants::epsilon * intersectionNormal;
@@ -2198,147 +2226,909 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 		//////////////////////////////		
 
 		//first sample a light vertex
-		vec3 lightVertex = scene->lightSource->sampleLightPosition(sample1D(threadID), sample1D(threadID));
-		vec3 forkToLight = lightVertex - forkVertex.vertex;
-		float distanceToLight = length(forkToLight);
-		if (distanceToLight > Constants::epsilon) {
+		int sampledLightIndex;
+		vec3 lightVertex = scene->sampleLightPosition(forkVertex.vertex, sample1D(threadID), sample1D(threadID), sample1D(threadID), &sampledLightIndex);
+		if (sampledLightIndex > -1) {
+			LightSource* sampledLightSource = scene->lightSources[sampledLightIndex];
+			vec3 forkToLight = lightVertex - forkVertex.vertex;
+			float distanceToLight = length(forkToLight);
+			if (distanceToLight > Constants::epsilon) {
 
-			//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
-			float expectedSegments = distanceToLight / medium.meanFreePathF;
-			if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
+				//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
+				float expectedSegments = distanceToLight / medium.meanFreePathF;
+				if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
 
-				vec3 omega = forkToLight / distanceToLight; //direction of the line to the light source
+					vec3 omega = forkToLight / distanceToLight; //direction of the line to the light source
 
-				vec3 u, v;
-				coordinateSystem(omega, u, v); //build tangent frame: (same for every seed vertex)
+					vec3 u, v;
+					coordinateSystem(omega, u, v); //build tangent frame: (same for every seed vertex)
 
-				//sample the segment lengths for the seed path:
-				int mvneeSegmentCount;
+					//sample the segment lengths for the seed path:
+					int mvneeSegmentCount;
 
-				bool validPath = sampleSeedSegmentLengths(distanceToLight, tl_seedSegmentLengths, tl_seedSegmentLengthSquares, &mvneeSegmentCount, threadID);
+					bool validPath = sampleSeedSegmentLengths(distanceToLight, tl_seedSegmentLengths, tl_seedSegmentLengthSquares, &mvneeSegmentCount, threadID);
 
-				//special case: surface normal culling for only one segment:
-				if (validPath && mvneeSegmentCount == 1) {
-					if (forkVertex.vertexType == TYPE_SURFACE) {
-						float cosThetaSurface = dot(omega, forkVertex.surfaceNormal);
-						if (cosThetaSurface <= 0.0f) {
+					//special case: surface normal culling for only one segment:
+					if (validPath && mvneeSegmentCount == 1) {
+						if (forkVertex.vertexType == TYPE_SURFACE) {
+							float cosThetaSurface = dot(omega, forkVertex.surfaceNormal);
+							if (cosThetaSurface <= 0.0f) {
+								validPath = false;
+							}
+						}
+						//light normal culling!
+						if (!sampledLightSource->validHitDirection(omega)) {
 							validPath = false;
 						}
 					}
-					//light normal culling!
-					if (!scene->lightSource->validHitDirection(omega)) {
-						validPath = false;
-					}
-				}
 
-				if (validPath && mvneeSegmentCount > 0) {
-					//consider max segment length:
-					if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= rendering.MAX_SEGMENT_COUNT) {
+					if (validPath && mvneeSegmentCount > 0) {
+						//consider max segment length:
+						if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= rendering.MAX_SEGMENT_COUNT) {
 
-						//determine seed vertices based on sampled segment lengths:
-						vec3 prevVertex = forkVertex.vertex;
-						for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
-							vec3 newSeedVertex = prevVertex + tl_seedSegmentLengths[s] * omega;
-							tl_seedVertices[s] = newSeedVertex;
-							prevVertex = newSeedVertex;
-						}
-						//add light vertex
-						tl_seedVertices[mvneeSegmentCount - 1] = lightVertex;
+							//determine seed vertices based on sampled segment lengths:
+							vec3 prevVertex = forkVertex.vertex;
+							for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
+								vec3 newSeedVertex = prevVertex + tl_seedSegmentLengths[s] * omega;
+								tl_seedVertices[s] = newSeedVertex;
+								prevVertex = newSeedVertex;
+							}
+							//add light vertex
+							tl_seedVertices[mvneeSegmentCount - 1] = lightVertex;
 
-						////////////////////////////
-						//  perturb all vertices but the lightDiskVertex:
-						////////////////////////////
-						vec3 previousPerturbedVertex = forkVertex.vertex;
-						double sigmaForHgSquare = sigmaForHG * sigmaForHG;
+							////////////////////////////
+							//  perturb all vertices but the lightDiskVertex:
+							////////////////////////////
+							vec3 previousPerturbedVertex = forkVertex.vertex;
+							double sigmaForHgSquare = sigmaForHG * sigmaForHG;
 
-						vec3 seedVertex;
-						vec3 perturbedVertex;
-						bool validMVNEEPath = true;
+							vec3 seedVertex;
+							vec3 perturbedVertex;
+							bool validMVNEEPath = true;
 
-						double leftSideFactor = 0.0;
-						double rightSideFactor = 0.0;
-						for (int x = 0; x < mvneeSegmentCount; x++) {
-							rightSideFactor += tl_seedSegmentLengthSquares[x];
-						}
-
-						for (int p = 0; p < (mvneeSegmentCount - 1); p++) {
-							seedVertex = tl_seedVertices[p];
-
-							//sanity check: distances to start and end may not be <= 0
-							float distanceToLineEnd = length(lightVertex - seedVertex);
-							float distanceToLineStart = length(seedVertex - forkVertex.vertex);
-							if (distanceToLineEnd <= 0.0f || distanceToLineStart <= 0.0f) {
-								validMVNEEPath = false;
-								break;
+							double leftSideFactor = 0.0;
+							double rightSideFactor = 0.0;
+							for (int x = 0; x < mvneeSegmentCount; x++) {
+								rightSideFactor += tl_seedSegmentLengthSquares[x];
 							}
 
-							double currSegLengthSqr = tl_seedSegmentLengthSquares[p];
-							leftSideFactor += currSegLengthSqr;
-							rightSideFactor -= currSegLengthSqr;
-							if (rightSideFactor <= 0.0f) {
-								validMVNEEPath = false;
-								break;
-							}
-							
-							double sigma = calcGaussProductSquaredSigmas(leftSideFactor * sigmaForHgSquare, rightSideFactor * sigmaForHgSquare);
-							double finalGGXAlpha = sigma * Constants::GGX_CONVERSION_Constants; //conversion with Constants factor
+							for (int p = 0; p < (mvneeSegmentCount - 1); p++) {
+								seedVertex = tl_seedVertices[p];
 
-							//perform perturbation using ggx radius and uniform angle in u,v plane 
-							perturbVertexGGX2D(finalGGXAlpha, u, v, seedVertex, &perturbedVertex, threadID);
+								//sanity check: distances to start and end may not be <= 0
+								float distanceToLineEnd = length(lightVertex - seedVertex);
+								float distanceToLineStart = length(seedVertex - forkVertex.vertex);
+								if (distanceToLineEnd <= 0.0f || distanceToLineStart <= 0.0f) {
+									validMVNEEPath = false;
+									break;
+								}
 
-							float maxT = tl_seedSegmentLengths[p];
+								double currSegLengthSqr = tl_seedSegmentLengthSquares[p];
+								leftSideFactor += currSegLengthSqr;
+								rightSideFactor -= currSegLengthSqr;
+								if (rightSideFactor <= 0.0f) {
+									validMVNEEPath = false;
+									break;
+								}
 
-							//for first perturbed vertex, check if perturbation violates the normal culling condition on the surface!
-							if (p == 0 && forkVertex.vertexType == TYPE_SURFACE) {
-								vec3 forkToFirstPerturbed = perturbedVertex - forkVertex.vertex;
-								float firstDistToPerturbed = length(forkToFirstPerturbed);
-								if (firstDistToPerturbed > 0.0f) {
-									forkToFirstPerturbed /= firstDistToPerturbed;
-									float cosThetaSurface = dot(forkToFirstPerturbed, forkVertex.surfaceNormal);
-									if (cosThetaSurface <= 0.0f) {
+								double sigma = calcGaussProductSquaredSigmas(leftSideFactor * sigmaForHgSquare, rightSideFactor * sigmaForHgSquare);
+								double finalGGXAlpha = sigma * Constants::GGX_CONVERSION_Constants; //conversion with Constants factor
+
+								//perform perturbation using ggx radius and uniform angle in u,v plane 
+								perturbVertexGGX2D(finalGGXAlpha, u, v, seedVertex, &perturbedVertex, threadID);
+
+								float maxT = tl_seedSegmentLengths[p];
+
+								//for first perturbed vertex, check if perturbation violates the normal culling condition on the surface!
+								if (p == 0 && forkVertex.vertexType == TYPE_SURFACE) {
+									vec3 forkToFirstPerturbed = perturbedVertex - forkVertex.vertex;
+									float firstDistToPerturbed = length(forkToFirstPerturbed);
+									if (firstDistToPerturbed > 0.0f) {
+										forkToFirstPerturbed /= firstDistToPerturbed;
+										float cosThetaSurface = dot(forkToFirstPerturbed, forkVertex.surfaceNormal);
+										if (cosThetaSurface <= 0.0f) {
+											validMVNEEPath = false;
+											break;
+										}
+									}
+									else {
+										validMVNEEPath = false;
+										break;
+									}
+
+									previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+
+									maxT -= Constants::epsilon;
+									if (maxT <= 0.0f) {
 										validMVNEEPath = false;
 										break;
 									}
 								}
+
+								//visibility check:
+
+								vec3 visibilityDirection = normalize(perturbedVertex - previousPerturbedVertex);
+
+								RTCRay shadowRay;
+								if (scene->vertexOccluded(previousPerturbedVertex, visibilityDirection, maxT, shadowRay)) {
+									validMVNEEPath = false;
+									break;
+								}
+
+								//add vertex to path
+								pathTracingPath->addMediumVertex(perturbedVertex, TYPE_MVNEE);
+								previousPerturbedVertex = perturbedVertex;
+							}
+
+							if (validMVNEEPath) {
+								vec3 lastSegmentDir = lightVertex - previousPerturbedVertex;
+								float lastSegmentLength = length(lastSegmentDir);
+								if (lastSegmentLength > 0.0f) {
+									assert(lastSegmentLength > 0.0f);
+									lastSegmentDir /= lastSegmentLength;
+
+									//visibility check: first potential normal culling:
+									if (sampledLightSource->validHitDirection(lastSegmentDir)) {
+
+										if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
+											previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+
+											if (lastSegmentLength - Constants::epsilon > 0.0f) {
+												lastSegmentLength -= Constants::epsilon;
+											}
+										}
+
+										//occlusion check:
+										RTCRay lastShadowRay;
+										if (!scene->vertexOccluded(previousPerturbedVertex, lastSegmentDir, lastSegmentLength, lastShadowRay)) {
+											PathVertex lightVertexStruct(lightVertex, TYPE_MVNEE, -1, sampledLightSource->normal);
+											pathTracingPath->addVertex(lightVertexStruct);
+
+											//calculate measurement constribution, pdf and mis weight:
+											//estimator Index for MVNEE is index of last path tracing vertex
+											//make sure the last path tracing vertex index is set correctly in order to use the correct PDF
+											vec3 finalContribution = calcFinalWeightedContribution_FINAL(pathTracingPath, lastPathTracingVertexIndex, sampledLightIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
+											finalPixel += finalContribution;
+										}
+									}
+								}
 								else {
-									validMVNEEPath = false;
-									break;
-								}
-
-								previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
-
-								maxT -= Constants::epsilon;
-								if (maxT <= 0.0f) {
-									validMVNEEPath = false;
-									break;
+									//cout << "last MVNEE segment length <= 0: " << lastSegmentLength << endl;
 								}
 							}
+						}
+						//delete all MVNEE vertices from the path construct, so path racing stays correct
+						pathTracingPath->cutMVNEEVertices();
+					}
 
-							//visibility check:
-							
-							vec3 visibilityDirection = normalize(perturbedVertex - previousPerturbedVertex);
+				}
+			}
+		}
 
-							RTCRay shadowRay;
-							if (scene->surfaceOccluded(previousPerturbedVertex, visibilityDirection, maxT, shadowRay)) {
-								validMVNEEPath = false;
-								break;
-							}
+		measurementContrib = newMeasurementContrib;
+		colorThroughput = newColorThroughput;
+	}
 
-							//add vertex to path
-							pathTracingPath->addMediumVertex(perturbedVertex, TYPE_MVNEE);
-							previousPerturbedVertex = perturbedVertex;
+	//Path sampling finished: now reset Path, so it can be filled again
+	pathTracingPath->reset();
+
+	return finalPixel;
+}
+
+
+/**
+* Calculates the measurement contribution as well as the path tracing PDF of the given path.
+* On top of that, the PDFs of all MVNEE estimators are calculated. THIS VERSION samples one segment from the light source and attempts a connection to this new vertex.
+*
+* As a result, the contribution of the path is calculated using the pdf of the estimator that created the path originally.
+* This contribution is weighted by the MIS weight using the estimator PDFs.
+*
+* For this method, the light is expected to be an area light, also all objects in the scene are expected to have a diffuse lambertian BRDF.
+*
+* @param path containing all vertices of the path from camera to light source, as well as surface information (normal objectID,etc.)
+* @param estimatorIndex index of the estimator that created the path:
+*			estimatorIndex = 0: path tracing
+*			estimatorIndex > 0: MVNEE starting after i path tracing segments
+* @return: the MIS weighted contribution of the path
+*/
+vec3 VolumeRenderer::calcFinalWeightedContribution_LightImportanceSampling(Path* path, int estimatorIndex, int lightSourceIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput)
+{
+	const int segmentCount = path->getSegmentLength();
+	assert(path->getVertexCount() >= 2);
+	assert(segmentCount <= rendering.MAX_SEGMENT_COUNT);
+	assert(estimatorIndex >= 0);
+	assert(estimatorIndex < segmentCount);
+	vec3 errorValue(0.0f); //returned in case of errors
+
+	LightSource* hitLightSource = scene->lightSources[lightSourceIndex];
+
+	float segmentLengthAtLight = 0.0f;
+	vec3 lastDirection;
+	vec3 lightVertex = path->getVertexPosition(segmentCount);
+
+	//special case: light was immediately hit after 1 segment:
+	if (path->getVertexCount() == 2) {
+		vec3 firstVertex = path->getVertexPosition(0);
+		vec3 dir = normalize(lightVertex - firstVertex);
+		return hitLightSource->getEmissionIntensity(lightVertex, dir);
+	}
+
+
+	//get thread local pre-reserved data for this thread:
+	int threadID = omp_get_thread_num();
+
+	vec3* tl_seedVertices = seedVertices[threadID];
+	double* tl_cumulatedPathTracingPDFs = cumulatedPathTracingPDFs[threadID];
+	float* tl_seedSegmentLengths = seedSegmentLengths[threadID];
+	double* tl_estimatorPDFs = estimatorPDFs[threadID];
+	double* tl_seedSegmentLengthSquares = seedSegmentLengthSquares[threadID];
+
+	//get measurement contrib and pdf and colorThroughput for the path using path tracing up to the last path tracing vertex:
+	double measurementContrib = currentMeasurementContrib;
+	double pathTracingPDF = tl_cumulatedPathTracingPDFs[segmentCount];
+	vec3 colorThroughput = currentColorThroughput;
+
+
+	/////////////////////////////////////////////////////////////
+	// calculate measurementContribution as well as path tracing pdfs
+	/////////////////////////////////////////////////////////////
+
+	//in case the path wasn't created with path tracing, measurement contrib and pdf have to be calculated for the end of the path
+	if (estimatorIndex > 0) {
+		pathTracingPDF = tl_cumulatedPathTracingPDFs[estimatorIndex];
+
+		// first direction can potentially be sampled by BRDF!!
+		PathVertex vertex1, vertex2;
+		path->getVertex(estimatorIndex - 1, vertex1);
+		path->getVertex(estimatorIndex, vertex2);
+
+		vec3 previousDir = vertex2.vertex - vertex1.vertex;
+		float previousDistance = length(previousDir);
+		if (previousDistance <= 0.0f) {
+			return errorValue;
+		}
+		previousDir /= previousDistance;
+
+		//calculate path tracing PDF and measurement contrib for every remaining vertex:
+		PathVertex currVert, prevVert;
+		for (int i = estimatorIndex + 1; i < path->getVertexCount(); i++) {
+			path->getVertex(i, currVert);
+			path->getVertex(i - 1, prevVert);
+			vec3 currentDir = currVert.vertex - prevVert.vertex;
+			float currentDistance = length(currentDir);
+			if (currentDistance <= 0.0f) {
+				return errorValue;
+			}
+			currentDir = currentDir / currentDistance; //normalize direction
+
+			double currTransmittance = exp(-medium.mu_t * (double)currentDistance);
+			double currG = 1.0 / ((double)(currentDistance)* (double)(currentDistance));
+			assert(isfinite(currG));
+
+			//contribute phase function * mu_s / BRDF depending on vertex
+			if (prevVert.vertexType == TYPE_SURFACE) {
+				//BRDF direction
+				BSDF* bsdfData = scene->getBSDF(prevVert.geometryID);
+
+				//float cosThetaBRDF = dot(prevVert.surfaceNormal, currentDir);
+				if (!bsdfData->validOutputDirection(prevVert.surfaceNormal, currentDir)) {
+					cout << "wrong outgoing direction at surface!" << endl; 
+					return errorValue;
+				}
+
+				colorThroughput *= bsdfData->evalBSDF(prevVert.surfaceNormal, currentDir, previousDir);
+				pathTracingPDF *= bsdfData->getBSDFDirectionPDF(prevVert.surfaceNormal, currentDir, previousDir);
+			}
+			else {
+				//phase direction
+				float cosThetaPhase = dot(previousDir, currentDir);
+				double phase = (double)henyeyGreenstein(cosThetaPhase, medium.hg_g_F);
+
+				measurementContrib *= medium.mu_s * phase;
+				pathTracingPDF *= phase;
+			}
+
+			if (i == segmentCount) {
+				//Light connection segment:
+				if (hitLightSource->validHitDirection(currentDir)) {
+					segmentLengthAtLight = currentDistance;
+					lastDirection = currentDir;
+
+					//special treatment when light source was hit:
+					float cosLightF = dot(-currentDir, hitLightSource->normal);
+					assert(cosLightF >= 0.0f);
+					currG *= (double)cosLightF;
+
+					measurementContrib *= currTransmittance * currG;
+					pathTracingPDF *= currTransmittance * currG;
+				}
+				else {
+					cout << "path hits light from backside!" << endl;
+					return errorValue;
+				}
+			}
+			//contribute G-Terms, transmittance: take care of medium coefficients!
+			else {
+				if (currVert.vertexType == TYPE_SURFACE) {
+					float cosTheta = dot(currVert.surfaceNormal, -currentDir);
+					if (cosTheta <= 0.0f) {
+						return errorValue;
+					}
+					assert(cosTheta > 0.0f);
+					currG *= (double)cosTheta;
+
+					measurementContrib *= currTransmittance * currG;
+					pathTracingPDF *= currTransmittance * currG;
+				}
+				else {
+					measurementContrib *= currTransmittance * currG;
+					pathTracingPDF *= medium.mu_t * currTransmittance * currG;
+				}
+			}
+
+			tl_cumulatedPathTracingPDFs[i] = pathTracingPDF;
+			previousDir = currentDir;
+		}
+	}
+	else {
+		vec3 preLastVertex = path->getVertexPosition(segmentCount - 1);
+		lastDirection = lightVertex - preLastVertex;
+		segmentLengthAtLight = length(lastDirection);
+		if (segmentLengthAtLight <= 0.0f) {
+			return errorValue;
+		}
+		lastDirection /= segmentLengthAtLight;
+	}
+
+	//set path tracing pdf at index 0
+	tl_estimatorPDFs[0] = pathTracingPDF;
+
+	//special cases: 
+	// 1) path has three vertices: this path can only be created with path Tracing!
+	// 2) Light was hit directly after a surface interaction -> only Path tracing can create this path
+	if (segmentCount == 2 || firstPossibleMVNEEEstimatorIndex == segmentCount - 1) {
+		float finalContribution = (float)(measurementContrib / pathTracingPDF);
+		if (isfinite(finalContribution)) {
+			assert(finalContribution >= 0.0);
+
+			vec3 emissionIntensity = hitLightSource->getEmissionIntensity(lightVertex, lastDirection);
+			vec3 finalPixel = finalContribution * colorThroughput * emissionIntensity;
+			return finalPixel;
+
+			//TEST: makes the problem visible: these paths, that cannot be created with MVNEE lead to severe noise!
+			//return errorValue;
+		}
+		else {
+			return errorValue;
+		}
+	}
+
+	//////////////////////////////////////
+	//calculate estimator PDFs:
+	//////////////////////////////////////
+	double sigmaForHgSquare = sigmaForHG * sigmaForHG;
+
+	vec3 mvneeDestination = path->getVertexPosition(segmentCount - 1);
+
+	//precalculate all the PDFs for the sampled light segment
+	vec3 sampledLightDir = -lastDirection;
+
+	//again trace ray to find the maximum sampling distance
+	RTCRay lightRay;
+	vec3 hitSurfaceNormal;
+	scene->intersectScene(lightVertex + Constants::epsilon * hitLightSource->normal, sampledLightDir, lightRay, hitSurfaceNormal);
+
+	double lightDirectionPDF = hitLightSource->getDirectionSamplingPDF(sampledLightDir) / ((double)segmentLengthAtLight * (double)segmentLengthAtLight);
+	double lightDistancePDF = getLimitedFreePathPDF(segmentLengthAtLight, medium.mu_t, Constants::epsilon, lightRay.tfar);
+
+	//there is one less MVNEE estimator, since a one segment connection is no longer possible!
+	for (int e = firstPossibleMVNEEEstimatorIndex; e < (segmentCount-1); e++) {
+		double pathTracingStartPDF = tl_cumulatedPathTracingPDFs[e]; //pdf for sampling the first vertices with path tracing
+		vec3 forkVertex = path->getVertexPosition(e); //last path tracing vertex and anchor point for the mvnee path
+
+		vec3 forkToDestination = mvneeDestination - forkVertex;
+		float distanceToDestination = length(forkToDestination);
+
+		float expectedSegments = distanceToDestination / medium.meanFreePathF;
+
+		if (distanceToDestination <= 0.0f) {
+			tl_estimatorPDFs[e] = 0.0;
+		}
+		else if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
+			//MVNEE is only valid if expected segment count is smaller than MAX_MVNEE_SEGMENTS!			
+			vec3 omega = forkToDestination / distanceToDestination; //normalize direction
+
+			//segment count of mvnee path, which is also the mvnee vertex count (from fork vertex to mvneeDestination!)
+			int mvneeSegmentCount = segmentCount - e - 1;
+
+			//build tangent frame: (same for every seed vertex)
+			vec3 u, v;
+			coordinateSystem(omega, u, v);
+
+			/////////////////////////////////
+			// recover seed distances and seed vertices:
+			/////////////////////////////////
+			bool validMVNEEPath = true;
+			float lastSeedDistance = 0.0f;
+			for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
+				vec3 perturbedVertex = path->getVertexPosition(e + 1 + s);
+				vec3 forkToPerturbed = perturbedVertex - forkVertex;
+
+				//use orthogonal projection to recover the seed distance:
+				float seedDistance = dot(forkToPerturbed, omega);
+
+				//now some things have to be checked in order to make sure the path can be created with mvnee:
+				//the new Distance from forkVertex has to be larger than the summed distance,
+				//also the summedDistance may never be larger than distanceToLight!!
+				if (seedDistance <= 0.0f || seedDistance <= lastSeedDistance || seedDistance >= distanceToDestination) {
+					//path is invalid for mvnee, set estimatorPDF to 0
+					tl_estimatorPDFs[e] = 0.0;
+					validMVNEEPath = false;
+					break;
+				}
+
+				assert(seedDistance > 0.0f);
+				vec3 seedVertex = forkVertex + seedDistance * omega;
+				tl_seedVertices[s] = seedVertex;
+				float distanceToPrevVertex = seedDistance - lastSeedDistance;
+				assert(distanceToPrevVertex > 0.0f);
+				tl_seedSegmentLengths[s] = distanceToPrevVertex;
+				tl_seedSegmentLengthSquares[s] = distanceToPrevVertex * distanceToPrevVertex;
+
+				lastSeedDistance = seedDistance;
+			}
+			//last segment:
+			float lastSegmentLength = distanceToDestination - lastSeedDistance;
+			tl_seedSegmentLengths[mvneeSegmentCount - 1] = lastSegmentLength;
+			tl_seedSegmentLengthSquares[mvneeSegmentCount - 1] = (double)lastSegmentLength * (double)lastSegmentLength;
+
+			/////////////////////////////////
+			// Calculate Perturbation PDF
+			/////////////////////////////////
+			double perturbationPDF = 1.0;
+
+			double leftSideFactor = 0.0;
+			double rightSideFactor = 0.0;
+			for (int x = 0; x < mvneeSegmentCount; x++) {
+				rightSideFactor += tl_seedSegmentLengthSquares[x];
+			}
+
+			if (validMVNEEPath) {
+				//uv-perturbation for all MVNEE-vertices but the light vertex!
+				for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
+					vec3 perturbedVertex = path->getVertexPosition(e + 1 + s);
+					vec3 forkToPerturbed = perturbedVertex - forkVertex;
+
+					double currSegLengthSqu = tl_seedSegmentLengthSquares[s];
+					leftSideFactor += currSegLengthSqu;
+					rightSideFactor -= currSegLengthSqu;
+					if (rightSideFactor <= 0.0f) {
+						validMVNEEPath = false;
+						break;
+					}
+
+					double sigma = calcGaussProductSquaredSigmas(leftSideFactor * sigmaForHgSquare, rightSideFactor * sigmaForHgSquare);
+					double finalGGXAlpha = sigma * Constants::GGX_CONVERSION_Constants; //multiply with Constants for conversion from gauss to ggx
+
+					//update pdfs:
+					vec3 seedToPerturbed = perturbedVertex - tl_seedVertices[s];
+					float uDist = dot(seedToPerturbed, u);
+					float vDist = dot(seedToPerturbed, v);
+					float r2 = (uDist*uDist) + (vDist*vDist);
+					double uvPerturbPDF = GGX_2D_PDF(r2, finalGGXAlpha); //pdf for u-v-plane perturbation
+
+					float distanceToPrevVertex = tl_seedSegmentLengths[s];
+
+					double combinedPDF = (medium.mu_t * uvPerturbPDF);
+					perturbationPDF *= combinedPDF;
+				}
+
+				//set final estimator pdf if everything is valid
+				if (validMVNEEPath) {
+					float lastSeedSegmentLength = tl_seedSegmentLengths[mvneeSegmentCount - 1];
+					if (lastSeedSegmentLength >= 0.0f) {
+						perturbationPDF *= exp(-medium.mu_t * (double)distanceToDestination);
+
+						double lightVertexSamplingPDF = scene->getLightVertexSamplingPDF(forkVertex, lightSourceIndex);
+						double combinedLightPDF = lightVertexSamplingPDF * lightDirectionPDF * lightDistancePDF;
+
+						double finalEstimatorPDF = pathTracingStartPDF * combinedLightPDF * perturbationPDF;
+						if (isfinite(finalEstimatorPDF)) {
+							tl_estimatorPDFs[e] = finalEstimatorPDF;
+						}
+						else {
+							cout << "finalEstimatorPDF infinite!" << endl;
+							tl_estimatorPDFs[e] = 0.0;
+						}
+					}
+					else {
+						tl_estimatorPDFs[e] = 0.0;
+					}
+				}
+				else {
+					tl_estimatorPDFs[e] = 0.0;
+				}
+			}
+			else {
+				tl_estimatorPDFs[e] = 0.0;
+			}
+		}
+		else {
+			tl_estimatorPDFs[e] = 0.0;
+		}
+	}
+
+	///////////////////////////////
+	// calculate MIS weight
+	///////////////////////////////
+	double finalPDF = tl_estimatorPDFs[estimatorIndex]; //pdf of the estimator that created the path
+	if (finalPDF > 0.0) {
+		float finalContribution = (float)(measurementContrib / finalPDF);
+		if (isfinite(finalContribution)) {
+			assert(finalContribution >= 0.0);
+
+			//one less mvnee estimator, since the minimum segment count for MVNEE is now 2!
+			int mvneeEstimatorCount = segmentCount - firstPossibleMVNEEEstimatorIndex - 1;
+			float misWeight = misBalanceWeight(finalPDF, pathTracingPDF, &tl_estimatorPDFs[firstPossibleMVNEEEstimatorIndex], mvneeEstimatorCount);
+
+			vec3 finalPixel = misWeight * finalContribution * colorThroughput * hitLightSource->getEmissionIntensity(lightVertex, lastDirection);
+			return finalPixel;
+		}
+	}
+
+	return errorValue;
+}
+
+
+/**
+* Combination of path tracing with Multiple Vertex Next Event Estimation (MVNEE) for direct lighting calculation at vertices in the medium,
+* as well as on surfaces. Creates one path tracing path and multiple MVNEE pathsstarting at the given rayOrigin with the given direction.
+* This function returns the MIS weighted summed contributions of all created paths from the given origin to the light source.
+*
+* THIS VERSION samples one segment from the light source and attempts a connection to this new vertex.
+*
+* The light in this integrator is expected to be an area light, also all objects in the scene are expected to have a diffuse lambertian BRDF.
+*
+* As MVNEE seed paths, a line connection is used. Seed distances are sampled using transmittance distance sampling.
+* MVNEE perturbation is performed using GGX2D sampling in the u-v-plane of the seed vertices.
+*/
+vec3 VolumeRenderer::pathTracing_MVNEE_LightImportanceSampling(const vec3& rayOrigin, const vec3& rayDir)
+{
+	//get thread local pre-reservers data for this thread:
+	int threadID = omp_get_thread_num();
+	Path* pathTracingPath = pathTracingPaths[threadID];
+	vec3* tl_seedVertices = seedVertices[threadID];
+	vec3* tl_perturbedVertices = perturbedVertices[threadID];
+	float* tl_seedSegmentLengths = seedSegmentLengths[threadID];
+	double* tl_seedSegmentLengthSquares = seedSegmentLengthSquares[threadID];
+
+	double* tl_cumulativePathTracingPDFs = cumulatedPathTracingPDFs[threadID];
+	tl_cumulativePathTracingPDFs[0] = 1.0;
+
+	//add first Vertex
+	PathVertex origin(rayOrigin, TYPE_ORIGIN, -1, rayDir);
+	pathTracingPath->addVertex(origin);
+
+	vec3 finalPixel(0.0f);
+
+	vec3 currPosition = rayOrigin;
+	vec3 currDir = rayDir;
+
+	double pathTracingPDF = 1.0;
+	double measurementContrib = 1.0;
+	double newMeasurementContrib = 1.0;
+	vec3 colorThroughput(1.0f);
+	vec3 newColorThroughput(1.0f);
+
+	//index of first vertex which could serve as a MVNEE estimator starting point
+	int firstPossibleMVNEEEstimatorIndex = 1;
+
+
+	while (pathTracingPath->getSegmentLength() < rendering.MAX_SEGMENT_COUNT) {
+		//sanity check assertions:
+		assert(pathTracingPath->getVertexCount() > 0);
+		PathVertex lastPathVertex;
+		pathTracingPath->getVertex(pathTracingPath->getSegmentLength(), lastPathVertex);
+		assert(lastPathVertex.vertexType != TYPE_MVNEE);
+		pathTracingPath->getVertex(pathTracingPath->getVertexCount() - 1, lastPathVertex);
+		assert(lastPathVertex.vertexType != TYPE_MVNEE);
+
+		//sample free path Lenth
+		double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), medium.mu_t);
+
+		//this is the starting vertex for MVNEE, depending on the intersection, it can either be a surface vertex or medium vertex
+		PathVertex forkVertex;
+
+		//intersect scene
+		RTCRay ray;
+		vec3 intersectionNormal;
+		if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal) && ray.tfar <= freePathLength) {
+			if (ray.tfar > Constants::epsilon) {
+
+				//////////////////////////////
+				// Surface interaction
+				//////////////////////////////
+				vec3 surfaceVertex = currPosition + ray.tfar * currDir;
+				forkVertex.vertex = surfaceVertex;
+				forkVertex.vertexType = TYPE_SURFACE;
+				forkVertex.geometryID = ray.geomID;
+				forkVertex.surfaceNormal = intersectionNormal;
+				pathTracingPath->addVertex(forkVertex);
+
+				int hitLightIndex;
+				if (scene->lightIntersected(surfaceVertex, &hitLightIndex)) {
+					//////////////////////////////
+					// Light hit
+					//////////////////////////////
+					LightSource* hitLight = scene->lightSources[hitLightIndex];
+
+					//normal culling
+					if (hitLight->validHitDirection(currDir)) {
+
+						//update contribution
+						double transmittance = exp(-medium.mu_t * ray.tfar);
+						float cosThetaLight = dot(-currDir, hitLight->normal);
+						double G = cosThetaLight / ((double)ray.tfar * (double)ray.tfar);
+						measurementContrib *= transmittance * G;
+						pathTracingPDF *= transmittance * G;
+						tl_cumulativePathTracingPDFs[pathTracingPath->getSegmentLength()] = pathTracingPDF;
+
+						//estimator Index for Path tracing is 0!
+						vec3 finalContribution;
+						if (pathTracingPath->getSegmentLength() > 1) {
+							finalContribution = calcFinalWeightedContribution_LightImportanceSampling(pathTracingPath, 0, hitLightIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
+						}
+						else {
+							finalContribution = hitLight->getEmissionIntensity(surfaceVertex, currDir);
 						}
 
-						if (validMVNEEPath) {
-							vec3 lastSegmentDir = lightVertex - previousPerturbedVertex;
-							float lastSegmentLength = length(lastSegmentDir);
-							if (lastSegmentLength > 0.0f) {
-								assert(lastSegmentLength > 0.0f);
-								lastSegmentDir /= lastSegmentLength;
+						finalPixel += finalContribution;
+					}
+					break;
+				}
 
-								//visibility check: first potential normal culling:
-								if (scene->lightSource->validHitDirection(lastSegmentDir)) {
+				//surface normal culling:
+				if (dot(intersectionNormal, -currDir) <= 0.0f) {
+					break;
+				}
 
+
+				//update pdf and mc:
+				double transmittance = exp(-medium.mu_t * ray.tfar);
+				float cosThetaSurface = dot(-currDir, intersectionNormal);
+				double G = cosThetaSurface / ((double)ray.tfar * (double)ray.tfar);
+				measurementContrib *= transmittance * G;
+				pathTracingPDF *= transmittance * G;
+				tl_cumulativePathTracingPDFs[pathTracingPath->getSegmentLength()] = pathTracingPDF;
+
+				//update index for MVNEE start vertex:
+				firstPossibleMVNEEEstimatorIndex = pathTracingPath->getSegmentLength();
+
+				BSDF* bsdfData = scene->getBSDF(ray.geomID);
+				//sample direction based on BRDF:
+				vec3 newDir = bsdfData->sampleBSDFDirection(intersectionNormal, currDir, sample1D(threadID), sample1D(threadID)); 
+				if (!bsdfData->validOutputDirection(intersectionNormal, newDir)) {
+					break;
+				}
+
+				//update pdf, measurement contrib and colorThroughput for BRDF-interaction:
+				double dirSamplingPDF = bsdfData->getBSDFDirectionPDF(intersectionNormal, newDir, currDir);
+				newMeasurementContrib = measurementContrib;
+				pathTracingPDF *= dirSamplingPDF;
+				ObjectData surfaceData;
+				scene->getObjectData(ray.geomID, &surfaceData);
+				newColorThroughput = colorThroughput * bsdfData->evalBSDF(intersectionNormal, newDir, currDir);
+
+				//update variables:
+				currPosition = surfaceVertex + Constants::epsilon * intersectionNormal;
+				currDir = newDir;
+			}
+			else {
+				break;
+			}
+		}
+		else {
+			//////////////////////////////
+			// Medium interaction
+			//////////////////////////////
+			vec3 nextScatteringVertex = currPosition + (float)freePathLength * currDir;
+			pathTracingPath->addMediumVertex(nextScatteringVertex, TYPE_MEDIUM);
+
+
+			//update pdf and mc:
+			double transmittance = exp(-medium.mu_t * freePathLength);
+			double G = 1.0 / ((double)freePathLength * (double)freePathLength);
+			if (!isfinite(G)) {
+				break;
+			}
+			assert(isfinite(G));
+			measurementContrib *= transmittance * G;
+			pathTracingPDF *= medium.mu_t * transmittance * G;
+			tl_cumulativePathTracingPDFs[pathTracingPath->getSegmentLength()] = pathTracingPDF;
+
+
+			//sample direction based on Henyey-Greenstein:
+			vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), medium.hg_g_F);
+
+			//update pdf and mc for phase function
+			float cos_theta_Phase = dot(currDir, newDir);
+			double phase = (double)henyeyGreenstein(cos_theta_Phase, medium.hg_g_F);
+			newMeasurementContrib = measurementContrib * medium.mu_s * phase;
+			pathTracingPDF *= phase;
+
+			//update variables:
+			forkVertex.vertex = nextScatteringVertex;
+			forkVertex.vertexType = TYPE_MEDIUM;
+			forkVertex.geometryID = -1;
+			forkVertex.surfaceNormal = vec3(0.0f);
+
+			currPosition = nextScatteringVertex;
+			currDir = newDir;
+		}
+
+		int lastPathTracingVertexIndex = pathTracingPath->getSegmentLength();
+		if (lastPathTracingVertexIndex >= rendering.MAX_SEGMENT_COUNT) {
+			break;
+		}
+
+		//////////////////////////////
+		// MVNEE
+		//////////////////////////////		
+
+		//first sample a light vertex
+		int sampledLightIndex;
+		vec3 lightVertex = scene->sampleLightPosition(forkVertex.vertex, sample1D(threadID), sample1D(threadID), sample1D(threadID), &sampledLightIndex);
+		if (sampledLightIndex > -1) {
+			LightSource* sampledLightSource = scene->lightSources[sampledLightIndex];
+
+			//now sample a segment starting from the light source!
+			vec3 sampledLightDir = sampledLightSource->sampleLightDirection(sample1D(threadID), sample1D(threadID));
+
+			//intersect scene to find the maximum distance
+			RTCRay lightRay;
+			vec3 hitSurfaceNormal;
+			scene->intersectScene(lightVertex + Constants::epsilon * sampledLightSource->normal, sampledLightDir, lightRay, hitSurfaceNormal);
+			assert(lightRay.tfar > 0.0f);
+
+			//sample distance based on transmittance between two limits
+			float lightSegmentLength = sampleLimitedFreePathLength(sample1DOpenInterval(threadID), medium.mu_t, Constants::epsilon, lightRay.tfar);
+
+			//this is the new vertex, which MVNEE is connecting with
+			vec3 mvneeDestination = lightVertex + lightSegmentLength * sampledLightDir;
+
+			vec3 forkToDestination = mvneeDestination - forkVertex.vertex;
+			float distanceToDestination = length(forkToDestination);
+			if (distanceToDestination > Constants::epsilon) {
+
+				//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
+				float expectedSegments = distanceToDestination / medium.meanFreePathF;
+				if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
+
+					vec3 omega = forkToDestination / distanceToDestination; //direction of the line to the light source
+
+					vec3 u, v;
+					coordinateSystem(omega, u, v); //build tangent frame: (same for every seed vertex)
+
+					//sample the segment lengths for the seed path:
+					int mvneeSegmentCount;
+
+					bool validPath = sampleSeedSegmentLengths(distanceToDestination, tl_seedSegmentLengths, tl_seedSegmentLengthSquares, &mvneeSegmentCount, threadID);
+
+					//special case: surface normal culling for only one segment:
+					if (validPath && mvneeSegmentCount == 1) {
+						if (forkVertex.vertexType == TYPE_SURFACE) {
+							float cosThetaSurface = dot(omega, forkVertex.surfaceNormal);
+							if (cosThetaSurface <= 0.0f) {
+								validPath = false;
+							}
+						}
+					}
+
+					if (validPath && mvneeSegmentCount > 0) {
+						//consider max segment length: since one segment is sampled always, add one extra
+						if (pathTracingPath->getSegmentLength() + mvneeSegmentCount + 1 <= rendering.MAX_SEGMENT_COUNT) {
+
+							//determine seed vertices based on sampled segment lengths:
+							vec3 prevVertex = forkVertex.vertex;
+							for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
+								vec3 newSeedVertex = prevVertex + tl_seedSegmentLengths[s] * omega;
+								tl_seedVertices[s] = newSeedVertex;
+								prevVertex = newSeedVertex;
+							}
+							//add destination vertex
+							tl_seedVertices[mvneeSegmentCount - 1] = mvneeDestination;
+
+							////////////////////////////
+							//  perturb all vertices but the mvneeDestination vertex:
+							////////////////////////////
+							vec3 previousPerturbedVertex = forkVertex.vertex;
+							double sigmaForHgSquare = sigmaForHG * sigmaForHG;
+
+							vec3 seedVertex;
+							vec3 perturbedVertex;
+							bool validMVNEEPath = true;
+
+							double leftSideFactor = 0.0;
+							double rightSideFactor = 0.0;
+							for (int x = 0; x < mvneeSegmentCount; x++) {
+								rightSideFactor += tl_seedSegmentLengthSquares[x];
+							}
+
+							for (int p = 0; p < (mvneeSegmentCount - 1); p++) {
+								seedVertex = tl_seedVertices[p];
+
+								//sanity check: distances to start and end may not be <= 0
+								float distanceToLineEnd = length(mvneeDestination - seedVertex);
+								float distanceToLineStart = length(seedVertex - forkVertex.vertex);
+								if (distanceToLineEnd <= 0.0f || distanceToLineStart <= 0.0f) {
+									validMVNEEPath = false;
+									break;
+								}
+
+								double currSegLengthSqr = tl_seedSegmentLengthSquares[p];
+								leftSideFactor += currSegLengthSqr;
+								rightSideFactor -= currSegLengthSqr;
+								if (rightSideFactor <= 0.0f) {
+									validMVNEEPath = false;
+									break;
+								}
+
+								double sigma = calcGaussProductSquaredSigmas(leftSideFactor * sigmaForHgSquare, rightSideFactor * sigmaForHgSquare);
+								double finalGGXAlpha = sigma * Constants::GGX_CONVERSION_Constants; //conversion with Constants factor
+
+								//perform perturbation using ggx radius and uniform angle in u,v plane 
+								perturbVertexGGX2D(finalGGXAlpha, u, v, seedVertex, &perturbedVertex, threadID);
+
+								float maxT = tl_seedSegmentLengths[p];
+
+								//for first perturbed vertex, check if perturbation violates the normal culling condition on the surface!
+								if (p == 0 && forkVertex.vertexType == TYPE_SURFACE) {
+									vec3 forkToFirstPerturbed = perturbedVertex - forkVertex.vertex;
+									float firstDistToPerturbed = length(forkToFirstPerturbed);
+									if (firstDistToPerturbed > 0.0f) {
+										forkToFirstPerturbed /= firstDistToPerturbed;
+										float cosThetaSurface = dot(forkToFirstPerturbed, forkVertex.surfaceNormal);
+										if (cosThetaSurface <= 0.0f) {
+											validMVNEEPath = false;
+											break;
+										}
+									}
+									else {
+										validMVNEEPath = false;
+										break;
+									}
+
+									previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+
+									maxT -= Constants::epsilon;
+									if (maxT <= 0.0f) {
+										validMVNEEPath = false;
+										break;
+									}
+								}
+
+								//visibility check:
+								vec3 visibilityDirection = normalize(perturbedVertex - previousPerturbedVertex);
+
+								RTCRay shadowRay;
+								if (scene->vertexOccluded(previousPerturbedVertex, visibilityDirection, maxT, shadowRay)) {
+									validMVNEEPath = false;
+									break;
+								}
+
+								//add vertex to path
+								pathTracingPath->addMediumVertex(perturbedVertex, TYPE_MVNEE);
+								previousPerturbedVertex = perturbedVertex;
+							}
+
+							if (validMVNEEPath) {
+								vec3 lastSegmentDir = mvneeDestination - previousPerturbedVertex;
+								float lastSegmentLength = length(lastSegmentDir);
+								if (lastSegmentLength > 0.0f) {
+									assert(lastSegmentLength > 0.0f);
+									lastSegmentDir /= lastSegmentLength;
+
+									//visibility check: no normal culling necessary (since we sampled the direction)
 									if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
 										previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
 
@@ -2349,27 +3139,837 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 
 									//occlusion check:
 									RTCRay lastShadowRay;
-									if (!scene->surfaceOccluded(previousPerturbedVertex, lastSegmentDir, lastSegmentLength, lastShadowRay)) {
-										PathVertex lightVertexStruct(lightVertex, TYPE_MVNEE, -1, scene->lightSource->normal);
+									if (!scene->vertexOccluded(previousPerturbedVertex, lastSegmentDir, lastSegmentLength, lastShadowRay)) {
+										//add mvnee destination vertex and light Vertex!
+
+										PathVertex destinationVertexStruct(mvneeDestination, TYPE_MVNEE, -1, vec3(0.0f));
+										pathTracingPath->addVertex(destinationVertexStruct);
+
+										PathVertex lightVertexStruct(lightVertex, TYPE_MVNEE, -1, sampledLightSource->normal);
 										pathTracingPath->addVertex(lightVertexStruct);
 
 										//calculate measurement constribution, pdf and mis weight:
 										//estimator Index for MVNEE is index of last path tracing vertex
 										//make sure the last path tracing vertex index is set correctly in order to use the correct PDF
-										vec3 finalContribution = calcFinalWeightedContribution_FINAL(pathTracingPath, lastPathTracingVertexIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
+										vec3 finalContribution = calcFinalWeightedContribution_LightImportanceSampling(pathTracingPath, lastPathTracingVertexIndex, sampledLightIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
 										finalPixel += finalContribution;
 									}
+
+								}
+								else {
+									//cout << "last MVNEE segment length <= 0: " << lastSegmentLength << endl;
 								}
 							}
-							else {
-								//cout << "last MVNEE segment length <= 0: " << lastSegmentLength << endl;
+						}
+						//delete all MVNEE vertices from the path construct, so path tracing stays correct
+						pathTracingPath->cutMVNEEVertices();
+					}
+
+				}
+			}
+		}
+		measurementContrib = newMeasurementContrib;
+		colorThroughput = newColorThroughput;
+	}
+
+	//Path sampling finished: now reset Path, so it can be filled again
+	pathTracingPath->reset();
+
+	return finalPixel;
+}
+
+
+/**
+* Calculates the measurement contribution as well as the path tracing PDF of the given path.
+* On top of that, the PDFs of all MVNEE estimators are calculated. THIS VERSION samples one segment from the light source and attempts a connection to this new vertex.
+* An extra one-segment-connection handling is provided.
+*
+* As a result, the contribution of the path is calculated using the pdf of the estimator that created the path originally.
+* This contribution is weighted by the MIS weight using the estimator PDFs.
+*
+* For this method, the light is expected to be an area light, also all objects in the scene are expected to have a diffuse lambertian BRDF.
+*
+* @param path containing all vertices of the path from camera to light source, as well as surface information (normal objectID,etc.)
+* @param estimatorIndex index of the estimator that created the path:
+*			estimatorIndex = 0: path tracing
+*			estimatorIndex > 0: MVNEE starting after i path tracing segments
+* @param lightSourceIndex index of the light source, that this path ends on
+* @return: the MIS weighted contribution of the path
+*/
+inline vec3 VolumeRenderer::calcFinalWeightedContribution_LightImportanceSamplingImproved(Path* path, int estimatorIndex, int lightSourceIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput)
+{
+	const int segmentCount = path->getSegmentLength();
+	assert(path->getVertexCount() >= 2);
+	assert(segmentCount <= rendering.MAX_SEGMENT_COUNT);
+	assert(estimatorIndex >= 0);
+	assert(estimatorIndex < segmentCount);
+	vec3 errorValue(0.0f); //returned in case of errors
+
+	LightSource* hitLightSource = scene->lightSources[lightSourceIndex];
+
+	float segmentLengthAtLight = 0.0f;
+	vec3 lastDirection;
+	vec3 lightVertex = path->getVertexPosition(segmentCount);
+
+	//special case: light was immediately hit after 1 segment:
+	if (path->getVertexCount() == 2) {
+		vec3 firstVertex = path->getVertexPosition(0);
+		vec3 dir = normalize(lightVertex - firstVertex);
+		return hitLightSource->getEmissionIntensity(lightVertex, dir);
+	}
+
+
+	//get thread local pre-reserved data for this thread:
+	int threadID = omp_get_thread_num();
+
+	vec3* tl_seedVertices = seedVertices[threadID];
+	double* tl_cumulatedPathTracingPDFs = cumulatedPathTracingPDFs[threadID];
+	float* tl_seedSegmentLengths = seedSegmentLengths[threadID];
+	double* tl_estimatorPDFs = estimatorPDFs[threadID];
+	double* tl_seedSegmentLengthSquares = seedSegmentLengthSquares[threadID];
+
+	//get measurement contrib and pdf and colorThroughput for the path using path tracing up to the last path tracing vertex:
+	double measurementContrib = currentMeasurementContrib;
+	double pathTracingPDF = tl_cumulatedPathTracingPDFs[segmentCount];
+	vec3 colorThroughput = currentColorThroughput;
+
+
+	/////////////////////////////////////////////////////////////
+	// calculate measurementContribution as well as path tracing pdfs
+	/////////////////////////////////////////////////////////////
+
+	//in case the path wasn't created with path tracing, measurement contrib and pdf have to be calculated for the end of the path
+	if (estimatorIndex > 0) {
+		pathTracingPDF = tl_cumulatedPathTracingPDFs[estimatorIndex];
+
+		// first direction can potentially be sampled by BRDF!!
+		PathVertex vertex1, vertex2;
+		path->getVertex(estimatorIndex - 1, vertex1);
+		path->getVertex(estimatorIndex, vertex2);
+
+		vec3 previousDir = vertex2.vertex - vertex1.vertex;
+		float previousDistance = length(previousDir);
+		if (previousDistance <= 0.0f) {
+			return errorValue;
+		}
+		previousDir /= previousDistance;
+
+		//calculate path tracing PDF and measurement contrib for every remaining vertex:
+		PathVertex currVert, prevVert;
+		for (int i = estimatorIndex + 1; i < path->getVertexCount(); i++) {
+			path->getVertex(i, currVert);
+			path->getVertex(i - 1, prevVert);
+			vec3 currentDir = currVert.vertex - prevVert.vertex;
+			float currentDistance = length(currentDir);
+			if (currentDistance <= 0.0f) {
+				return errorValue;
+			}
+			currentDir = currentDir / currentDistance; //normalize direction
+
+			double currTransmittance = exp(-medium.mu_t * (double)currentDistance);
+			double currG = 1.0 / ((double)(currentDistance)* (double)(currentDistance));
+			assert(isfinite(currG));
+
+			//contribute phase function * mu_s / BRDF depending on vertex
+			if (prevVert.vertexType == TYPE_SURFACE) {
+				//BRDF direction
+				BSDF* bsdfData = scene->getBSDF(prevVert.geometryID);
+
+				if (!bsdfData->validOutputDirection(prevVert.surfaceNormal, currentDir)) {
+					cout << "wrong outgoing direction at surface!" << endl; 
+					return errorValue;
+				}
+
+				colorThroughput *= bsdfData->evalBSDF(prevVert.surfaceNormal, currentDir, previousDir);
+				pathTracingPDF *= bsdfData->getBSDFDirectionPDF(prevVert.surfaceNormal, currentDir, previousDir);
+			}
+			else {
+				//phase direction
+				float cosThetaPhase = dot(previousDir, currentDir);
+				double phase = (double)henyeyGreenstein(cosThetaPhase, medium.hg_g_F);
+
+				measurementContrib *= medium.mu_s * phase;
+				pathTracingPDF *= phase;
+			}
+
+			if (i == segmentCount) {
+				//Light connection segment:
+				if (hitLightSource->validHitDirection(currentDir)) {
+					segmentLengthAtLight = currentDistance;
+					lastDirection = currentDir;
+
+					//special treatment when light source was hit:
+					float cosLightF = dot(-currentDir, hitLightSource->normal);
+					assert(cosLightF >= 0.0f);
+					currG *= (double)cosLightF;
+
+					measurementContrib *= currTransmittance * currG;
+					pathTracingPDF *= currTransmittance * currG;
+				}
+				else {
+					cout << "path hits light from backside!" << endl;
+					return errorValue;
+				}
+			}
+			//contribute G-Terms, transmittance: take care of medium coefficients!
+			else {
+				if (currVert.vertexType == TYPE_SURFACE) {
+					float cosTheta = dot(currVert.surfaceNormal, -currentDir);
+					if (cosTheta <= 0.0f) {
+						return errorValue;
+					}
+					assert(cosTheta > 0.0f);
+					currG *= (double)cosTheta;
+
+					measurementContrib *= currTransmittance * currG;
+					pathTracingPDF *= currTransmittance * currG;
+				}
+				else {
+					measurementContrib *= currTransmittance * currG;
+					pathTracingPDF *= medium.mu_t * currTransmittance * currG;
+				}
+			}
+
+			tl_cumulatedPathTracingPDFs[i] = pathTracingPDF;
+			previousDir = currentDir;
+		}
+	}
+	else {
+		vec3 preLastVertex = path->getVertexPosition(segmentCount - 1);
+		lastDirection = lightVertex - preLastVertex;
+		segmentLengthAtLight = length(lastDirection);
+		if (segmentLengthAtLight <= 0.0f) {
+			return errorValue;
+		}
+		lastDirection /= segmentLengthAtLight;
+	}
+
+	//set path tracing pdf at index 0
+	tl_estimatorPDFs[0] = pathTracingPDF;
+	
+	//////////////////////////////////////
+	//calculate estimator PDFs:
+	//////////////////////////////////////
+	double sigmaForHgSquare = sigmaForHG * sigmaForHG;
+
+	vec3 mvneeDestination = path->getVertexPosition(segmentCount - 1);
+
+	//precalculate all the PDFs for the sampled light segment
+	vec3 sampledLightDir = -lastDirection;
+
+	//again trace ray to find the maximum sampling distance
+	RTCRay lightRay;
+	vec3 hitSurfaceNormal;
+	scene->intersectScene(lightVertex + Constants::epsilon * hitLightSource->normal, sampledLightDir, lightRay, hitSurfaceNormal);
+
+	double lightDirectionPDF = hitLightSource->getDirectionSamplingPDF(sampledLightDir) / ((double)segmentLengthAtLight * (double)segmentLengthAtLight);
+	double lightDistancePDF = getLimitedFreePathPDF(segmentLengthAtLight, medium.mu_t, Constants::epsilon, lightRay.tfar);
+
+	//there is one less MVNEE estimator, since a one segment connection is no longer possible!
+	for (int e = firstPossibleMVNEEEstimatorIndex; e < (segmentCount - 1); e++) {
+		double pathTracingStartPDF = tl_cumulatedPathTracingPDFs[e]; //pdf for sampling the first vertices with path tracing
+		vec3 forkVertex = path->getVertexPosition(e); //last path tracing vertex and anchor point for the mvnee path
+
+		vec3 forkToDestination = mvneeDestination - forkVertex;
+		float distanceToDestination = length(forkToDestination);
+
+		float expectedSegments = distanceToDestination / medium.meanFreePathF;
+
+		if (distanceToDestination <= 0.0f) {
+			tl_estimatorPDFs[e] = 0.0;
+		}
+		else if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
+			//MVNEE is only valid if expected segment count is smaller than MAX_MVNEE_SEGMENTS!			
+			vec3 omega = forkToDestination / distanceToDestination; //normalize direction
+
+			//segment count of mvnee path, which is also the mvnee vertex count (from fork vertex to mvneeDestination!)
+			int mvneeSegmentCount = segmentCount - e - 1;
+
+			//build tangent frame: (same for every seed vertex)
+			vec3 u, v;
+			coordinateSystem(omega, u, v);
+
+			/////////////////////////////////
+			// recover seed distances and seed vertices:
+			/////////////////////////////////
+			bool validMVNEEPath = true;
+			float lastSeedDistance = 0.0f;
+			for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
+				vec3 perturbedVertex = path->getVertexPosition(e + 1 + s);
+				vec3 forkToPerturbed = perturbedVertex - forkVertex;
+
+				//use orthogonal projection to recover the seed distance:
+				float seedDistance = dot(forkToPerturbed, omega);
+
+				//now some things have to be checked in order to make sure the path can be created with mvnee:
+				//the new Distance from forkVertex has to be larger than the summed distance,
+				//also the summedDistance may never be larger than distanceToLight!!
+				if (seedDistance <= 0.0f || seedDistance <= lastSeedDistance || seedDistance >= distanceToDestination) {
+					//path is invalid for mvnee, set estimatorPDF to 0
+					tl_estimatorPDFs[e] = 0.0;
+					validMVNEEPath = false;
+					break;
+				}
+
+				assert(seedDistance > 0.0f);
+				vec3 seedVertex = forkVertex + seedDistance * omega;
+				tl_seedVertices[s] = seedVertex;
+				float distanceToPrevVertex = seedDistance - lastSeedDistance;
+				assert(distanceToPrevVertex > 0.0f);
+				tl_seedSegmentLengths[s] = distanceToPrevVertex;
+				tl_seedSegmentLengthSquares[s] = distanceToPrevVertex * distanceToPrevVertex;
+
+				lastSeedDistance = seedDistance;
+			}
+			//last segment:
+			float lastSegmentLength = distanceToDestination - lastSeedDistance;
+			tl_seedSegmentLengths[mvneeSegmentCount - 1] = lastSegmentLength;
+			tl_seedSegmentLengthSquares[mvneeSegmentCount - 1] = (double)lastSegmentLength * (double)lastSegmentLength;
+
+			/////////////////////////////////
+			// Calculate Perturbation PDF
+			/////////////////////////////////
+			double perturbationPDF = 1.0;
+
+			double leftSideFactor = 0.0;
+			double rightSideFactor = 0.0;
+			for (int x = 0; x < mvneeSegmentCount; x++) {
+				rightSideFactor += tl_seedSegmentLengthSquares[x];
+			}
+
+			if (validMVNEEPath) {
+				//uv-perturbation for all MVNEE-vertices but the light vertex!
+				for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
+					vec3 perturbedVertex = path->getVertexPosition(e + 1 + s);
+					vec3 forkToPerturbed = perturbedVertex - forkVertex;
+
+					double currSegLengthSqu = tl_seedSegmentLengthSquares[s];
+					leftSideFactor += currSegLengthSqu;
+					rightSideFactor -= currSegLengthSqu;
+					if (rightSideFactor <= 0.0f) {
+						validMVNEEPath = false;
+						break;
+					}
+
+					double sigma = calcGaussProductSquaredSigmas(leftSideFactor * sigmaForHgSquare, rightSideFactor * sigmaForHgSquare);
+					double finalGGXAlpha = sigma * Constants::GGX_CONVERSION_Constants; //multiply with Constants for conversion from gauss to ggx
+
+					//update pdfs:
+					vec3 seedToPerturbed = perturbedVertex - tl_seedVertices[s];
+					float uDist = dot(seedToPerturbed, u);
+					float vDist = dot(seedToPerturbed, v);
+					float r2 = (uDist*uDist) + (vDist*vDist);
+					double uvPerturbPDF = GGX_2D_PDF(r2, finalGGXAlpha); //pdf for u-v-plane perturbation
+
+					float distanceToPrevVertex = tl_seedSegmentLengths[s];
+
+					double combinedPDF = (medium.mu_t * uvPerturbPDF);
+					perturbationPDF *= combinedPDF;
+				}
+
+				//set final estimator pdf if everything is valid
+				if (validMVNEEPath) {
+					float lastSeedSegmentLength = tl_seedSegmentLengths[mvneeSegmentCount - 1];
+					if (lastSeedSegmentLength >= 0.0f) {
+						perturbationPDF *= exp(-medium.mu_t * (double)distanceToDestination);
+
+						double lightVertexSamplingPDF = scene->getLightVertexSamplingPDF(forkVertex, lightSourceIndex);
+						double combinedLightPDF = lightVertexSamplingPDF * lightDirectionPDF * lightDistancePDF;
+
+						double finalEstimatorPDF = pathTracingStartPDF * combinedLightPDF * perturbationPDF;
+						if (isfinite(finalEstimatorPDF)) {
+							tl_estimatorPDFs[e] = finalEstimatorPDF;
+						}
+						else {
+							cout << "finalEstimatorPDF infinite!" << endl;
+							tl_estimatorPDFs[e] = 0.0;
+						}
+					}
+					else {
+						tl_estimatorPDFs[e] = 0.0;
+					}
+				}
+				else {
+					tl_estimatorPDFs[e] = 0.0;
+				}
+			}
+			else {
+				tl_estimatorPDFs[e] = 0.0;
+			}
+		}
+		else {
+			tl_estimatorPDFs[e] = 0.0;
+		}
+	}
+
+	/////////////////
+	// NEE PDF!
+	/////////////////	
+	vec3 neeForkVertex = path->getVertexPosition(segmentCount - 1); //last path tracing vertex and anchor point for the mvnee path
+	vec3 neeDir = lightVertex - neeForkVertex;
+	tl_estimatorPDFs[segmentCount - 1] = 0.0;
+	float neeDistance = length(neeDir);
+	if (neeDistance > Constants::epsilon && neeDistance <= (rendering.MAX_MVNEE_SEGMENTS_F * medium.meanFreePathF)) {
+		double neePathTracingStartPDF = tl_cumulatedPathTracingPDFs[segmentCount - 1]; //pdf for sampling the first vertices with path tracing
+		tl_estimatorPDFs[segmentCount - 1] = neePathTracingStartPDF * scene->getLightVertexSamplingPDF(neeForkVertex, lightSourceIndex);
+	}
+
+	///////////////////////////////
+	// calculate MIS weight
+	///////////////////////////////
+	double finalPDF = tl_estimatorPDFs[estimatorIndex]; //pdf of the estimator that created the path
+	if (finalPDF > 0.0) {
+		float finalContribution = (float)(measurementContrib / finalPDF);
+		if (isfinite(finalContribution)) {
+			assert(finalContribution >= 0.0);
+
+			//one less mvnee estimator, since the minimum segment count for MVNEE is now 2!
+			int estimatorCount = segmentCount - firstPossibleMVNEEEstimatorIndex;
+			float misWeight = misBalanceWeight(finalPDF, pathTracingPDF, &tl_estimatorPDFs[firstPossibleMVNEEEstimatorIndex], estimatorCount);
+
+			vec3 finalPixel = misWeight * finalContribution * colorThroughput * hitLightSource->getEmissionIntensity(lightVertex, lastDirection);
+			return finalPixel;
+		}
+	}
+
+	return errorValue;
+}
+
+
+/**
+* Combination of path tracing with Multiple Vertex Next Event Estimation (MVNEE) for direct lighting calculation at vertices in the medium,
+* as well as on surfaces. Creates one path tracing path and multiple MVNEE pathsstarting at the given rayOrigin with the given direction.
+* This function returns the MIS weighted summed contributions of all created paths from the given origin to the light source.
+*
+* THIS VERSION samples one segment from the light source and attempts a connection to this new vertex. An extra one-segment-connection handling is provided.
+*
+* The light in this integrator is expected to be an area light, also all objects in the scene are expected to have a diffuse lambertian BRDF.
+*
+* As MVNEE seed paths, a line connection is used. Seed distances are sampled using transmittance distance sampling.
+* MVNEE perturbation is performed using GGX2D sampling in the u-v-plane of the seed vertices.
+*/
+vec3 VolumeRenderer::pathTracing_MVNEE_LightImportanceSamplingImproved(const vec3& rayOrigin, const vec3& rayDir)
+{
+	//get thread local pre-reservers data for this thread:
+	int threadID = omp_get_thread_num();
+	Path* pathTracingPath = pathTracingPaths[threadID];
+	vec3* tl_seedVertices = seedVertices[threadID];
+	vec3* tl_perturbedVertices = perturbedVertices[threadID];
+	float* tl_seedSegmentLengths = seedSegmentLengths[threadID];
+	double* tl_seedSegmentLengthSquares = seedSegmentLengthSquares[threadID];
+
+	double* tl_cumulativePathTracingPDFs = cumulatedPathTracingPDFs[threadID];
+	tl_cumulativePathTracingPDFs[0] = 1.0;
+
+	//add first Vertex
+	PathVertex origin(rayOrigin, TYPE_ORIGIN, -1, rayDir);
+	pathTracingPath->addVertex(origin);
+
+	vec3 finalPixel(0.0f);
+
+	vec3 currPosition = rayOrigin;
+	vec3 currDir = rayDir;
+
+	double pathTracingPDF = 1.0;
+	double measurementContrib = 1.0;
+	double newMeasurementContrib = 1.0;
+	vec3 colorThroughput(1.0f);
+	vec3 newColorThroughput(1.0f);
+
+	//index of first vertex which could serve as a MVNEE estimator starting point
+	int firstPossibleMVNEEEstimatorIndex = 1;
+
+
+	while (pathTracingPath->getSegmentLength() < rendering.MAX_SEGMENT_COUNT) {
+		//sanity check assertions:
+		assert(pathTracingPath->getVertexCount() > 0);
+		PathVertex lastPathVertex;
+		pathTracingPath->getVertex(pathTracingPath->getSegmentLength(), lastPathVertex);
+		assert(lastPathVertex.vertexType != TYPE_MVNEE);
+		pathTracingPath->getVertex(pathTracingPath->getVertexCount() - 1, lastPathVertex);
+		assert(lastPathVertex.vertexType != TYPE_MVNEE);
+
+		//sample free path Lenth
+		double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), medium.mu_t);
+
+		//this is the starting vertex for MVNEE, depending on the intersection, it can either be a surface vertex or medium vertex
+		PathVertex forkVertex;
+
+		//intersect scene
+		RTCRay ray;
+		vec3 intersectionNormal;
+		if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal) && ray.tfar <= freePathLength) {
+			if (ray.tfar > Constants::epsilon) {
+
+				//////////////////////////////
+				// Surface interaction
+				//////////////////////////////
+				vec3 surfaceVertex = currPosition + ray.tfar * currDir;
+				forkVertex.vertex = surfaceVertex;
+				forkVertex.vertexType = TYPE_SURFACE;
+				forkVertex.geometryID = ray.geomID;
+				forkVertex.surfaceNormal = intersectionNormal;
+				pathTracingPath->addVertex(forkVertex);
+
+				int hitLightIndex;
+				if (scene->lightIntersected(surfaceVertex, &hitLightIndex)) {
+					//////////////////////////////
+					// Light hit
+					//////////////////////////////
+					LightSource* hitLight = scene->lightSources[hitLightIndex];
+
+					//normal culling
+					if (hitLight->validHitDirection(currDir)) {
+
+						//update contribution
+						double transmittance = exp(-medium.mu_t * ray.tfar);
+						float cosThetaLight = dot(-currDir, hitLight->normal);
+						double G = cosThetaLight / ((double)ray.tfar * (double)ray.tfar);
+						measurementContrib *= transmittance * G;
+						pathTracingPDF *= transmittance * G;
+						tl_cumulativePathTracingPDFs[pathTracingPath->getSegmentLength()] = pathTracingPDF;
+
+						//estimator Index for Path tracing is 0!
+						vec3 finalContribution;
+						if (pathTracingPath->getSegmentLength() > 1) {
+							finalContribution = calcFinalWeightedContribution_LightImportanceSamplingImproved(pathTracingPath, 0, hitLightIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
+						}
+						else {
+							finalContribution = hitLight->getEmissionIntensity(surfaceVertex, currDir);
+						}
+
+						finalPixel += finalContribution;
+					}
+					break;
+				}
+
+				//surface normal culling:
+				if (dot(intersectionNormal, -currDir) <= 0.0f) {
+					break;
+				}
+
+
+				//update pdf and mc:
+				double transmittance = exp(-medium.mu_t * ray.tfar);
+				float cosThetaSurface = dot(-currDir, intersectionNormal);
+				double G = cosThetaSurface / ((double)ray.tfar * (double)ray.tfar);
+				measurementContrib *= transmittance * G;
+				pathTracingPDF *= transmittance * G;
+				tl_cumulativePathTracingPDFs[pathTracingPath->getSegmentLength()] = pathTracingPDF;
+
+				//update index for MVNEE start vertex:
+				firstPossibleMVNEEEstimatorIndex = pathTracingPath->getSegmentLength();
+
+
+				BSDF* bsdfData = scene->getBSDF(ray.geomID);
+				//sample direction based on BRDF:
+				vec3 newDir = bsdfData->sampleBSDFDirection(intersectionNormal, currDir, sample1D(threadID), sample1D(threadID)); 
+				if (!bsdfData->validOutputDirection(intersectionNormal, newDir)) {
+					break;
+				}
+
+				//update pdf, measurement contrib and colorThroughput for BRDF-interaction:
+				double dirSamplingPDF = bsdfData->getBSDFDirectionPDF(intersectionNormal, newDir, currDir);
+				newMeasurementContrib = measurementContrib;
+				pathTracingPDF *= dirSamplingPDF;
+				ObjectData surfaceData;
+				scene->getObjectData(ray.geomID, &surfaceData);
+				newColorThroughput = colorThroughput * bsdfData->evalBSDF(intersectionNormal, newDir, currDir);
+
+				//update variables:
+				currPosition = surfaceVertex + Constants::epsilon * intersectionNormal;
+				currDir = newDir;
+			}
+			else {
+				break;
+			}
+		}
+		else {
+			//////////////////////////////
+			// Medium interaction
+			//////////////////////////////
+			vec3 nextScatteringVertex = currPosition + (float)freePathLength * currDir;
+			pathTracingPath->addMediumVertex(nextScatteringVertex, TYPE_MEDIUM);
+
+
+			//update pdf and mc:
+			double transmittance = exp(-medium.mu_t * freePathLength);
+			double G = 1.0 / ((double)freePathLength * (double)freePathLength);
+			if (!isfinite(G)) {
+				break;
+			}
+			assert(isfinite(G));
+			measurementContrib *= transmittance * G;
+			pathTracingPDF *= medium.mu_t * transmittance * G;
+			tl_cumulativePathTracingPDFs[pathTracingPath->getSegmentLength()] = pathTracingPDF;
+
+
+			//sample direction based on Henyey-Greenstein:
+			vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), medium.hg_g_F);
+
+			//update pdf and mc for phase function
+			float cos_theta_Phase = dot(currDir, newDir);
+			double phase = (double)henyeyGreenstein(cos_theta_Phase, medium.hg_g_F);
+			newMeasurementContrib = measurementContrib * medium.mu_s * phase;
+			pathTracingPDF *= phase;
+
+			//update variables:
+			forkVertex.vertex = nextScatteringVertex;
+			forkVertex.vertexType = TYPE_MEDIUM;
+			forkVertex.geometryID = -1;
+			forkVertex.surfaceNormal = vec3(0.0f);
+
+			currPosition = nextScatteringVertex;
+			currDir = newDir;
+		}
+
+		int lastPathTracingVertexIndex = pathTracingPath->getSegmentLength();
+		if (lastPathTracingVertexIndex >= rendering.MAX_SEGMENT_COUNT) {
+			break;
+		}
+
+		//////////////////////////////
+		// MVNEE
+		//////////////////////////////		
+
+		//first sample a light vertex
+		int sampledLightIndex;
+		vec3 lightVertex = scene->sampleLightPosition(forkVertex.vertex, sample1D(threadID), sample1D(threadID), sample1D(threadID), &sampledLightIndex);
+		if (sampledLightIndex > -1) {
+			LightSource* sampledLightSource = scene->lightSources[sampledLightIndex];
+
+			//now sample a segment starting from the light source!
+			vec3 sampledLightDir = sampledLightSource->sampleLightDirection(sample1D(threadID), sample1D(threadID));
+
+			//intersect scene to find the maximum distance
+			RTCRay lightRay;
+			vec3 hitSurfaceNormal;
+			scene->intersectScene(lightVertex + Constants::epsilon * sampledLightSource->normal, sampledLightDir, lightRay, hitSurfaceNormal);
+			assert(lightRay.tfar > 0.0f);
+
+			//sample distance based on transmittance between two limits
+			float lightSegmentLength = sampleLimitedFreePathLength(sample1DOpenInterval(threadID), medium.mu_t, Constants::epsilon, lightRay.tfar);
+
+			//this is the new vertex, which MVNEE is connecting with
+			vec3 mvneeDestination = lightVertex + lightSegmentLength * sampledLightDir;
+
+			vec3 forkToDestination = mvneeDestination - forkVertex.vertex;
+			float distanceToDestination = length(forkToDestination);
+			if (distanceToDestination > Constants::epsilon) {
+
+				//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
+				float expectedSegments = distanceToDestination / medium.meanFreePathF;
+				if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
+
+					vec3 omega = forkToDestination / distanceToDestination; //direction of the line to the light source
+
+					vec3 u, v;
+					coordinateSystem(omega, u, v); //build tangent frame: (same for every seed vertex)
+
+					//sample the segment lengths for the seed path:
+					int mvneeSegmentCount;
+
+					bool validPath = sampleSeedSegmentLengths(distanceToDestination, tl_seedSegmentLengths, tl_seedSegmentLengthSquares, &mvneeSegmentCount, threadID);
+
+					//special case: surface normal culling for only one segment:
+					if (validPath && mvneeSegmentCount == 1) {
+						if (forkVertex.vertexType == TYPE_SURFACE) {
+							float cosThetaSurface = dot(omega, forkVertex.surfaceNormal);
+							if (cosThetaSurface <= 0.0f) {
+								validPath = false;
 							}
 						}
 					}
-					//delete all MVNEE vertices from the path construct, so path racing stays correct
-					pathTracingPath->cutMVNEEVertices();
-				}
 
+					if (validPath && mvneeSegmentCount > 0) {
+						//consider max segment length: since one segment is sampled always, add one extra
+						if (pathTracingPath->getSegmentLength() + mvneeSegmentCount + 1 <= rendering.MAX_SEGMENT_COUNT) {
+
+							//determine seed vertices based on sampled segment lengths:
+							vec3 prevVertex = forkVertex.vertex;
+							for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
+								vec3 newSeedVertex = prevVertex + tl_seedSegmentLengths[s] * omega;
+								tl_seedVertices[s] = newSeedVertex;
+								prevVertex = newSeedVertex;
+							}
+							//add destination vertex
+							tl_seedVertices[mvneeSegmentCount - 1] = mvneeDestination;
+
+							////////////////////////////
+							//  perturb all vertices but the mvneeDestination vertex:
+							////////////////////////////
+							vec3 previousPerturbedVertex = forkVertex.vertex;
+							double sigmaForHgSquare = sigmaForHG * sigmaForHG;
+
+							vec3 seedVertex;
+							vec3 perturbedVertex;
+							bool validMVNEEPath = true;
+
+							double leftSideFactor = 0.0;
+							double rightSideFactor = 0.0;
+							for (int x = 0; x < mvneeSegmentCount; x++) {
+								rightSideFactor += tl_seedSegmentLengthSquares[x];
+							}
+
+							for (int p = 0; p < (mvneeSegmentCount - 1); p++) {
+								seedVertex = tl_seedVertices[p];
+
+								//sanity check: distances to start and end may not be <= 0
+								float distanceToLineEnd = length(mvneeDestination - seedVertex);
+								float distanceToLineStart = length(seedVertex - forkVertex.vertex);
+								if (distanceToLineEnd <= 0.0f || distanceToLineStart <= 0.0f) {
+									validMVNEEPath = false;
+									break;
+								}
+
+								double currSegLengthSqr = tl_seedSegmentLengthSquares[p];
+								leftSideFactor += currSegLengthSqr;
+								rightSideFactor -= currSegLengthSqr;
+								if (rightSideFactor <= 0.0f) {
+									validMVNEEPath = false;
+									break;
+								}
+
+								double sigma = calcGaussProductSquaredSigmas(leftSideFactor * sigmaForHgSquare, rightSideFactor * sigmaForHgSquare);
+								double finalGGXAlpha = sigma * Constants::GGX_CONVERSION_Constants; //conversion with Constants factor
+
+								//perform perturbation using ggx radius and uniform angle in u,v plane 
+								perturbVertexGGX2D(finalGGXAlpha, u, v, seedVertex, &perturbedVertex, threadID);
+
+								float maxT = tl_seedSegmentLengths[p];
+
+								//for first perturbed vertex, check if perturbation violates the normal culling condition on the surface!
+								if (p == 0 && forkVertex.vertexType == TYPE_SURFACE) {
+									vec3 forkToFirstPerturbed = perturbedVertex - forkVertex.vertex;
+									float firstDistToPerturbed = length(forkToFirstPerturbed);
+									if (firstDistToPerturbed > 0.0f) {
+										forkToFirstPerturbed /= firstDistToPerturbed;
+										float cosThetaSurface = dot(forkToFirstPerturbed, forkVertex.surfaceNormal);
+										if (cosThetaSurface <= 0.0f) {
+											validMVNEEPath = false;
+											break;
+										}
+									}
+									else {
+										validMVNEEPath = false;
+										break;
+									}
+
+									previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+
+									maxT -= Constants::epsilon;
+									if (maxT <= 0.0f) {
+										validMVNEEPath = false;
+										break;
+									}
+								}
+
+								//visibility check:
+
+								vec3 visibilityDirection = normalize(perturbedVertex - previousPerturbedVertex);
+
+								RTCRay shadowRay;
+								if (scene->vertexOccluded(previousPerturbedVertex, visibilityDirection, maxT, shadowRay)) {
+									validMVNEEPath = false;
+									break;
+								}
+
+								//add vertex to path
+								pathTracingPath->addMediumVertex(perturbedVertex, TYPE_MVNEE);
+								previousPerturbedVertex = perturbedVertex;
+							}
+
+							if (validMVNEEPath) {
+								vec3 lastSegmentDir = mvneeDestination - previousPerturbedVertex;
+								float lastSegmentLength = length(lastSegmentDir);
+								if (lastSegmentLength > 0.0f) {
+									assert(lastSegmentLength > 0.0f);
+									lastSegmentDir /= lastSegmentLength;
+
+									//visibility check: no normal culling necessary (since we sampled the direction)
+									if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
+										previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+
+										if (lastSegmentLength - Constants::epsilon > 0.0f) {
+											lastSegmentLength -= Constants::epsilon;
+										}
+									}
+
+									//occlusion check:
+									RTCRay lastShadowRay;
+									if (!scene->vertexOccluded(previousPerturbedVertex, lastSegmentDir, lastSegmentLength, lastShadowRay)) {
+										//add mvnee destination vertex and light Vertex!
+
+										PathVertex destinationVertexStruct(mvneeDestination, TYPE_MVNEE, -1, vec3(0.0f));
+										pathTracingPath->addVertex(destinationVertexStruct);
+
+										PathVertex lightVertexStruct(lightVertex, TYPE_MVNEE, -1, sampledLightSource->normal);
+										pathTracingPath->addVertex(lightVertexStruct);
+
+										//calculate measurement constribution, pdf and mis weight:
+										//estimator Index for MVNEE is index of last path tracing vertex
+										//make sure the last path tracing vertex index is set correctly in order to use the correct PDF
+										vec3 finalContribution = calcFinalWeightedContribution_LightImportanceSamplingImproved(pathTracingPath, lastPathTracingVertexIndex, sampledLightIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
+										finalPixel += finalContribution;
+									}
+
+								}
+								else {
+									//cout << "last MVNEE segment length <= 0: " << lastSegmentLength << endl;
+								}
+							}
+						}
+						//delete all MVNEE vertices from the path construct, so path tracing stays correct
+						pathTracingPath->cutMVNEEVertices();
+					}
+
+				}
+			}
+		}
+		
+		///////////////////////////
+		// Next Event Estimation
+		///////////////////////////
+
+		if (sampledLightIndex > -1) {
+			LightSource* sampledLightSource = scene->lightSources[sampledLightIndex];
+			vec3 forkToLight = lightVertex - forkVertex.vertex;
+			float distanceToLight = length(forkToLight);
+			if (distanceToLight > Constants::epsilon) {
+				forkToLight /= distanceToLight;
+
+				//only perform NEE whenever the distance to the light source is reasonable small:
+				if (distanceToLight <= (rendering.MAX_MVNEE_SEGMENTS_F * medium.meanFreePathF)) {
+
+					//surface normal culling:
+					if (forkVertex.vertexType != TYPE_SURFACE || dot(forkVertex.surfaceNormal, forkToLight) > 0.0f) {
+						//light normal culling
+						if (sampledLightSource->validHitDirection(forkToLight)) {
+
+							//occlusion check:
+							vec3 startPos = forkVertex.vertex;
+							if (forkVertex.vertexType == TYPE_SURFACE) {
+								startPos += Constants::epsilon * forkVertex.surfaceNormal;
+								distanceToLight -= Constants::epsilon;
+							}
+							RTCRay shadowRay;
+							if (!scene->vertexOccluded(startPos, forkToLight, distanceToLight, shadowRay)) {
+
+								PathVertex lightVertexStruct(lightVertex, TYPE_MVNEE, -1, sampledLightSource->normal);
+								pathTracingPath->addVertex(lightVertexStruct);
+
+								//calculate measurement constribution, pdf and mis weight:
+								//estimator Index for MVNEE is index of last path tracing vertex
+								//make sure the last path tracing vertex index is set correctly in order to use the correct PDF
+								vec3 finalContribution = calcFinalWeightedContribution_LightImportanceSamplingImproved(pathTracingPath, lastPathTracingVertexIndex, sampledLightIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
+								finalPixel += finalContribution;
+
+								//delete all MVNEE vertices from the path construct, so path tracing stays correct
+								pathTracingPath->cutMVNEEVertices();
+							}
+						}
+					}
+				}
 			}
 		}
 
@@ -2404,7 +4004,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_FINAL(const vec3& rayOrigin, const vec3& 
 * @param currentColorThroughput:  color threoughput of the path from start to the vertex at "estimatorIndex"
 * @return: the MIS weighted contribution of the path
 */
-vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, const int estimatorIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput)
+vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, const int estimatorIndex, int lightSourceIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput)
 {
 	const int segmentCount = path->getSegmentLength();
 	assert(path->getVertexCount() >= 2);
@@ -2413,9 +4013,16 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 	assert(estimatorIndex < segmentCount);
 	vec3 errorValue(0.0f); //returned in case of errors
 
+	LightSource* hitLightSource = scene->lightSources[lightSourceIndex];
+
+	vec3 lastDirection;
+	vec3 lightVertex = path->getVertexPosition(segmentCount);
+
 	//special case: light was immediately hit after 1 segment:
 	if (path->getVertexCount() == 2) {
-		return scene->lightSource->Le;
+		vec3 firstVertex = path->getVertexPosition(0);
+		vec3 dir = normalize(lightVertex - firstVertex);
+		return hitLightSource->getEmissionIntensity(lightVertex, dir);
 	}
 
 
@@ -2473,19 +4080,15 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 			//contribute phase function * mu_s / BRDF depending on vertex
 			if (prevVert.vertexType == TYPE_SURFACE) {
 				//BRDF direction
-				ObjectData surfaceData;
-				scene->getObjectData(prevVert.geometryID, &surfaceData);
+				BSDF* bsdfData = scene->getBSDF(prevVert.geometryID);
 
-				float cosThetaBRDF = dot(prevVert.surfaceNormal, currentDir);
-				if (cosThetaBRDF <= 0.0f) {
-					cout << "wrong outgoing direction at surface!: cosTheta = " << cosThetaBRDF << endl;
+				if (!bsdfData->validOutputDirection(prevVert.surfaceNormal, currentDir)) {
+					cout << "wrong outgoing direction at surface!" << endl;
 					return errorValue;
 				}
-				assert(cosThetaBRDF > 0.0f);
 
-				colorThroughput *= evalDiffuseBRDF(surfaceData.albedo);
-				measurementContrib *= (double)cosThetaBRDF;
-				pathTracingPDF *= diffuseBRDFSamplingPDF(prevVert.surfaceNormal, currentDir);
+				colorThroughput *= bsdfData->evalBSDF(prevVert.surfaceNormal, currentDir, previousDir);
+				pathTracingPDF *= bsdfData->getBSDFDirectionPDF(prevVert.surfaceNormal, currentDir, previousDir);
 			}
 			else {
 				//phase direction
@@ -2498,9 +4101,11 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 
 			if (i == segmentCount) {
 				//Light connection segment:
-				if (scene->lightSource->validHitDirection(currentDir)) {
+				if (hitLightSource->validHitDirection(currentDir)) {
+					lastDirection = currentDir;
+
 					//special treatment when light source was hit:
-					float cosLightF = dot(-currentDir, scene->lightSource->normal);
+					float cosLightF = dot(-currentDir, hitLightSource->normal);
 					assert(cosLightF >= 0.0f);
 					currG *= (double)cosLightF;
 
@@ -2535,6 +4140,10 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 			previousDir = currentDir;
 		}
 	}
+	else {
+		vec3 preLastVertex = path->getVertexPosition(segmentCount - 1);
+		lastDirection = normalize(lightVertex - preLastVertex);
+	}
 
 	//set path tracing pdf at index 0
 	tl_estimatorPDFs[0] = pathTracingPDF;
@@ -2547,7 +4156,6 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 	for (int e = firstPossibleMVNEEEstimatorIndex; e < segmentCount; e++) {
 		double pathTracingStartPDF = tl_cumulatedPathTracingPDFs[e]; //pdf for sampling the first vertices with path tracing
 		vec3 forkVertex = path->getVertexPosition(e); //last path tracing vertex and anchor point for the mvnee path
-		vec3 lightVertex = path->getVertexPosition(segmentCount);
 
 		vec3 forkToLight = lightVertex - forkVertex;
 		float distanceToLight = length(forkToLight);
@@ -2650,7 +4258,9 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 					if (lastSeedSegmentLength >= 0.0f) {
 						perturbationPDF *= exp(-medium.mu_t * (double)distanceToLight);
 
-						double finalEstimatorPDF = pathTracingStartPDF * scene->lightSource->getPositionSamplingPDF() * perturbationPDF;
+						double lightVertexSamplingPDF = scene->getLightVertexSamplingPDF(forkVertex, lightSourceIndex);
+
+						double finalEstimatorPDF = pathTracingStartPDF * lightVertexSamplingPDF * perturbationPDF;
 						if (isfinite(finalEstimatorPDF)) {
 							tl_estimatorPDFs[e] = finalEstimatorPDF;
 						}
@@ -2685,18 +4295,16 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_GaussPerturb(Path* path, cons
 		if (isfinite(finalContribution)) {
 			assert(finalContribution >= 0.0);
 
-			//const int estimatorCount = segmentCount;
-			//float misWeight = misPowerWeight(finalPDF, tl_estimatorPDFs, estimatorCount);
-
 			int mvneeEstimatorCount = segmentCount - firstPossibleMVNEEEstimatorIndex;
 			float misWeight = misBalanceWeight(finalPDF, pathTracingPDF, &tl_estimatorPDFs[firstPossibleMVNEEEstimatorIndex], mvneeEstimatorCount);
 
-			vec3 finalPixel = misWeight * finalContribution * colorThroughput * scene->lightSource->Le;
+			vec3 finalPixel = misWeight * finalContribution * colorThroughput * hitLightSource->getEmissionIntensity(lightVertex, lastDirection);
 			return finalPixel;
 		}
 	}
 
 	return errorValue;
+
 }
 
 /**
@@ -2776,17 +4384,19 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 				forkVertex.surfaceNormal = intersectionNormal;
 				pathTracingPath->addVertex(forkVertex);
 
-				if (scene->lightSource->lightIntersected(surfaceVertex)) {
+				int hitLightIndex;
+				if (scene->lightIntersected(surfaceVertex, &hitLightIndex)) {
 					//////////////////////////////
 					// Light hit
 					//////////////////////////////
+					LightSource* hitLight = scene->lightSources[hitLightIndex];
 
 					//normal culling
-					if (scene->lightSource->validHitDirection(currDir)) {
+					if (hitLight->validHitDirection(currDir)) {
 
 						//update contribution
 						double transmittance = exp(-medium.mu_t * ray.tfar);
-						float cosThetaLight = dot(-currDir, scene->lightSource->normal);
+						float cosThetaLight = dot(-currDir, hitLight->normal);
 						double G = cosThetaLight / ((double)ray.tfar * (double)ray.tfar);
 						measurementContrib *= transmittance * G;
 						pathTracingPDF *= transmittance * G;
@@ -2795,10 +4405,10 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 						//estimator Index for Path tracing is 0!
 						vec3 finalContribution;
 						if (pathTracingPath->getSegmentLength() > 1) {
-							finalContribution = calcFinalWeightedContribution_GaussPerturb(pathTracingPath, 0, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
+							finalContribution = calcFinalWeightedContribution_GaussPerturb(pathTracingPath, 0, hitLightIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
 						}
 						else {
-							finalContribution = scene->lightSource->Le;
+							finalContribution = hitLight->getEmissionIntensity(surfaceVertex, currDir);
 						}
 
 						finalPixel += finalContribution;
@@ -2824,17 +4434,20 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 				firstPossibleMVNEEEstimatorIndex = pathTracingPath->getSegmentLength();
 
 
+				BSDF* bsdfData = scene->getBSDF(ray.geomID);
 				//sample direction based on BRDF:
-				vec3 newDir = sampleDiffuseBRDFDir(intersectionNormal, sample1D(threadID), sample1D(threadID));
+				vec3 newDir = bsdfData->sampleBSDFDirection(intersectionNormal, currDir, sample1D(threadID), sample1D(threadID)); 
+				if (!bsdfData->validOutputDirection(intersectionNormal, newDir)) {
+					break;
+				}
 
 				//update pdf, measurement contrib and colorThroughput for BRDF-interaction:
-				double dirSamplingPDF = diffuseBRDFSamplingPDF(intersectionNormal, newDir);
-				float cos_theta_surface = dot(intersectionNormal, newDir);
-				newMeasurementContrib = measurementContrib * (double)cos_theta_surface;
+				double dirSamplingPDF = bsdfData->getBSDFDirectionPDF(intersectionNormal, newDir, currDir);
+				newMeasurementContrib = measurementContrib;
 				pathTracingPDF *= dirSamplingPDF;
 				ObjectData surfaceData;
 				scene->getObjectData(ray.geomID, &surfaceData);
-				newColorThroughput = colorThroughput * evalDiffuseBRDF(surfaceData.albedo);
+				newColorThroughput = colorThroughput * bsdfData->evalBSDF(intersectionNormal, newDir, currDir);
 
 				//update variables:
 				currPosition = surfaceVertex + Constants::epsilon * intersectionNormal;
@@ -2893,179 +4506,182 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 		//////////////////////////////		
 
 		//first sample a light vertex
-		vec3 lightVertex = scene->lightSource->sampleLightPosition(sample1D(threadID), sample1D(threadID));
-		vec3 forkToLight = lightVertex - forkVertex.vertex;
-		float distanceToLight = length(forkToLight);
-		if (distanceToLight > Constants::epsilon) {
+		int sampledLightIndex;
+		vec3 lightVertex = scene->sampleLightPosition(forkVertex.vertex, sample1D(threadID), sample1D(threadID), sample1D(threadID), &sampledLightIndex);
+		if (sampledLightIndex > -1) {
+			LightSource* sampledLightSource = scene->lightSources[sampledLightIndex];
+			vec3 forkToLight = lightVertex - forkVertex.vertex;
+			float distanceToLight = length(forkToLight);
+			if (distanceToLight > Constants::epsilon) {
 
-			//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
-			float expectedSegments = distanceToLight / medium.meanFreePathF;
-			if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
+				//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
+				float expectedSegments = distanceToLight / medium.meanFreePathF;
+				if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
 
-				vec3 omega = forkToLight / distanceToLight; //direction of the line to the light source
+					vec3 omega = forkToLight / distanceToLight; //direction of the line to the light source
 
-				vec3 u, v;
-				coordinateSystem(omega, u, v); //build tangent frame: (same for every seed vertex)
+					vec3 u, v;
+					coordinateSystem(omega, u, v); //build tangent frame: (same for every seed vertex)
 
-				//sample the segment lengths for the seed path:
-				int mvneeSegmentCount;
+					//sample the segment lengths for the seed path:
+					int mvneeSegmentCount;
 
-				bool validPath = sampleSeedSegmentLengths(distanceToLight, tl_seedSegmentLengths, tl_seedSegmentLengthSquares, &mvneeSegmentCount, threadID);
+					bool validPath = sampleSeedSegmentLengths(distanceToLight, tl_seedSegmentLengths, tl_seedSegmentLengthSquares, &mvneeSegmentCount, threadID);
 
-				//special case: surface normal culling for only one segment:
-				if (validPath && mvneeSegmentCount == 1) {
-					if (forkVertex.vertexType == TYPE_SURFACE) {
-						float cosThetaSurface = dot(omega, forkVertex.surfaceNormal);
-						if (cosThetaSurface <= 0.0f) {
+					//special case: surface normal culling for only one segment:
+					if (validPath && mvneeSegmentCount == 1) {
+						if (forkVertex.vertexType == TYPE_SURFACE) {
+							float cosThetaSurface = dot(omega, forkVertex.surfaceNormal);
+							if (cosThetaSurface <= 0.0f) {
+								validPath = false;
+							}
+						}
+						//light normal culling!
+						if (!sampledLightSource->validHitDirection(omega)) {
 							validPath = false;
 						}
 					}
-					//light normal culling!
-					if (!scene->lightSource->validHitDirection(omega)) {
-						validPath = false;
-					}
-				}
 
-				if (validPath && mvneeSegmentCount > 0) {
-					//consider max segment length:
-					if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= rendering.MAX_SEGMENT_COUNT) {
+					if (validPath && mvneeSegmentCount > 0) {
+						//consider max segment length:
+						if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= rendering.MAX_SEGMENT_COUNT) {
 
-						//determine seed vertices based on sampled segment lengths:
-						vec3 prevVertex = forkVertex.vertex;
-						for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
-							vec3 newSeedVertex = prevVertex + tl_seedSegmentLengths[s] * omega;
-							tl_seedVertices[s] = newSeedVertex;
-							prevVertex = newSeedVertex;
-						}
-						//add light vertex
-						tl_seedVertices[mvneeSegmentCount - 1] = lightVertex;
+							//determine seed vertices based on sampled segment lengths:
+							vec3 prevVertex = forkVertex.vertex;
+							for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
+								vec3 newSeedVertex = prevVertex + tl_seedSegmentLengths[s] * omega;
+								tl_seedVertices[s] = newSeedVertex;
+								prevVertex = newSeedVertex;
+							}
+							//add light vertex
+							tl_seedVertices[mvneeSegmentCount - 1] = lightVertex;
 
-						////////////////////////////
-						//  perturb all vertices but the lightDiskVertex:
-						////////////////////////////
-						vec3 previousPerturbedVertex = forkVertex.vertex;
-						double sigmaForHgSquare = sigmaForHG * sigmaForHG;
+							////////////////////////////
+							//  perturb all vertices but the lightDiskVertex:
+							////////////////////////////
+							vec3 previousPerturbedVertex = forkVertex.vertex;
+							double sigmaForHgSquare = sigmaForHG * sigmaForHG;
 
-						vec3 seedVertex;
-						vec3 perturbedVertex;
-						bool validMVNEEPath = true;
+							vec3 seedVertex;
+							vec3 perturbedVertex;
+							bool validMVNEEPath = true;
 
-						double leftSideFactor = 0.0;
-						double rightSideFactor = 0.0;
-						for (int x = 0; x < mvneeSegmentCount; x++) {
-							rightSideFactor += tl_seedSegmentLengthSquares[x];
-						}
-
-						for (int p = 0; p < (mvneeSegmentCount - 1); p++) {
-							seedVertex = tl_seedVertices[p];
-
-							//sanity check: distances to start and end may not be <= 0
-							float distanceToLineEnd = length(lightVertex - seedVertex);
-							float distanceToLineStart = length(seedVertex - forkVertex.vertex);
-							if (distanceToLineEnd <= 0.0f || distanceToLineStart <= 0.0f) {
-								validMVNEEPath = false;
-								break;
+							double leftSideFactor = 0.0;
+							double rightSideFactor = 0.0;
+							for (int x = 0; x < mvneeSegmentCount; x++) {
+								rightSideFactor += tl_seedSegmentLengthSquares[x];
 							}
 
-							double currSegLengthSqr = tl_seedSegmentLengthSquares[p];
-							leftSideFactor += currSegLengthSqr;
-							rightSideFactor -= currSegLengthSqr;
-							if (rightSideFactor <= 0.0f) {
-								validMVNEEPath = false;
-								break;
-							}
+							for (int p = 0; p < (mvneeSegmentCount - 1); p++) {
+								seedVertex = tl_seedVertices[p];
 
-							double sigma = calcGaussProductSquaredSigmas(leftSideFactor * sigmaForHgSquare, rightSideFactor * sigmaForHgSquare);
+								//sanity check: distances to start and end may not be <= 0
+								float distanceToLineEnd = length(lightVertex - seedVertex);
+								float distanceToLineStart = length(seedVertex - forkVertex.vertex);
+								if (distanceToLineEnd <= 0.0f || distanceToLineStart <= 0.0f) {
+									validMVNEEPath = false;
+									break;
+								}
 
-							//perform perturbation using gauss 2D
-							perturbVertexGaussian2D(sigma, u, v, seedVertex, &perturbedVertex, threadID);
+								double currSegLengthSqr = tl_seedSegmentLengthSquares[p];
+								leftSideFactor += currSegLengthSqr;
+								rightSideFactor -= currSegLengthSqr;
+								if (rightSideFactor <= 0.0f) {
+									validMVNEEPath = false;
+									break;
+								}
 
-							float maxT = tl_seedSegmentLengths[p];
+								double sigma = calcGaussProductSquaredSigmas(leftSideFactor * sigmaForHgSquare, rightSideFactor * sigmaForHgSquare);
 
-							//for first perturbed vertex, check if perturbation violates the normal culling condition on the surface!
-							if (p == 0 && forkVertex.vertexType == TYPE_SURFACE) {
-								vec3 forkToFirstPerturbed = perturbedVertex - forkVertex.vertex;
-								float firstDistToPerturbed = length(forkToFirstPerturbed);
-								if (firstDistToPerturbed > 0.0f) {
-									forkToFirstPerturbed /= firstDistToPerturbed;
-									float cosThetaSurface = dot(forkToFirstPerturbed, forkVertex.surfaceNormal);
-									if (cosThetaSurface <= 0.0f) {
+								//perform perturbation using gauss 2D
+								perturbVertexGaussian2D(sigma, u, v, seedVertex, &perturbedVertex, threadID);
+
+								float maxT = tl_seedSegmentLengths[p];
+
+								//for first perturbed vertex, check if perturbation violates the normal culling condition on the surface!
+								if (p == 0 && forkVertex.vertexType == TYPE_SURFACE) {
+									vec3 forkToFirstPerturbed = perturbedVertex - forkVertex.vertex;
+									float firstDistToPerturbed = length(forkToFirstPerturbed);
+									if (firstDistToPerturbed > 0.0f) {
+										forkToFirstPerturbed /= firstDistToPerturbed;
+										float cosThetaSurface = dot(forkToFirstPerturbed, forkVertex.surfaceNormal);
+										if (cosThetaSurface <= 0.0f) {
+											validMVNEEPath = false;
+											break;
+										}
+									}
+									else {
+										validMVNEEPath = false;
+										break;
+									}
+
+									previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+
+									maxT -= Constants::epsilon;
+									if (maxT <= 0.0f) {
 										validMVNEEPath = false;
 										break;
 									}
 								}
-								else {
+
+								//visibility check:							
+								vec3 visibilityDirection = normalize(perturbedVertex - previousPerturbedVertex);
+
+								RTCRay shadowRay;
+								if (scene->vertexOccluded(previousPerturbedVertex, visibilityDirection, maxT, shadowRay)) {
 									validMVNEEPath = false;
 									break;
 								}
 
-								previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
-
-								maxT -= Constants::epsilon;
-								if (maxT <= 0.0f) {
-									validMVNEEPath = false;
-									break;
-								}
+								//add vertex to path
+								pathTracingPath->addMediumVertex(perturbedVertex, TYPE_MVNEE);
+								previousPerturbedVertex = perturbedVertex;
 							}
 
-							//visibility check:							
-							vec3 visibilityDirection = normalize(perturbedVertex - previousPerturbedVertex);
+							if (validMVNEEPath) {
+								vec3 lastSegmentDir = lightVertex - previousPerturbedVertex;
+								float lastSegmentLength = length(lastSegmentDir);
+								if (lastSegmentLength > 0.0f) {
+									assert(lastSegmentLength > 0.0f);
+									lastSegmentDir /= lastSegmentLength;
 
-							RTCRay shadowRay;
-							if (scene->surfaceOccluded(previousPerturbedVertex, visibilityDirection, maxT, shadowRay)) {
-								validMVNEEPath = false;
-								break;
-							}
+									//visibility check: first potential normal culling:
+									if (sampledLightSource->validHitDirection(lastSegmentDir)) {
 
-							//add vertex to path
-							pathTracingPath->addMediumVertex(perturbedVertex, TYPE_MVNEE);
-							previousPerturbedVertex = perturbedVertex;
-						}
+										if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
+											previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
 
-						if (validMVNEEPath) {
-							vec3 lastSegmentDir = lightVertex - previousPerturbedVertex;
-							float lastSegmentLength = length(lastSegmentDir);
-							if (lastSegmentLength > 0.0f) {
-								assert(lastSegmentLength > 0.0f);
-								lastSegmentDir /= lastSegmentLength;
+											if (lastSegmentLength - Constants::epsilon > 0.0f) {
+												lastSegmentLength -= Constants::epsilon;
+											}
+										}
 
-								//visibility check: first potential normal culling:
-								if (scene->lightSource->validHitDirection(lastSegmentDir)) {
+										//occlusion check:
+										RTCRay lastShadowRay;
+										if (!scene->vertexOccluded(previousPerturbedVertex, lastSegmentDir, lastSegmentLength, lastShadowRay)) {
+											PathVertex lightVertexStruct(lightVertex, TYPE_MVNEE, -1, sampledLightSource->normal);
+											pathTracingPath->addVertex(lightVertexStruct);
 
-									if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
-										previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
-
-										if (lastSegmentLength - Constants::epsilon > 0.0f) {
-											lastSegmentLength -= Constants::epsilon;
+											//calculate measurement constribution, pdf and mis weight:
+											//estimator Index for MVNEE is index of last path tracing vertex
+											//make sure the last path tracing vertex index is set correctly in order to use the correct PDF
+											vec3 finalContribution = calcFinalWeightedContribution_GaussPerturb(pathTracingPath, lastPathTracingVertexIndex, sampledLightIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
+											finalPixel += finalContribution;
 										}
 									}
-
-									//occlusion check:
-									RTCRay lastShadowRay;
-									if (!scene->surfaceOccluded(previousPerturbedVertex, lastSegmentDir, lastSegmentLength, lastShadowRay)) {
-										PathVertex lightVertexStruct(lightVertex, TYPE_MVNEE, -1, scene->lightSource->normal);
-										pathTracingPath->addVertex(lightVertexStruct);
-
-										//calculate measurement constribution, pdf and mis weight:
-										//estimator Index for MVNEE is index of last path tracing vertex
-										//make sure the last path tracing vertex index is set correctly in order to use the correct PDF
-										vec3 finalContribution = calcFinalWeightedContribution_GaussPerturb(pathTracingPath, lastPathTracingVertexIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
-										finalPixel += finalContribution;
-									}
+								}
+								else {
+									//cout << "last MVNEE segment length <= 0: " << lastSegmentLength << endl;
 								}
 							}
-							else {
-								//cout << "last MVNEE segment length <= 0: " << lastSegmentLength << endl;
-							}
 						}
+						//delete all MVNEE vertices from the path construct, so path racing stays correct
+						pathTracingPath->cutMVNEEVertices();
 					}
-					//delete all MVNEE vertices from the path construct, so path racing stays correct
-					pathTracingPath->cutMVNEEVertices();
-				}
 
+				}
 			}
 		}
-
 		measurementContrib = newMeasurementContrib;
 		colorThroughput = newColorThroughput;
 	}
@@ -3096,7 +4712,7 @@ vec3 VolumeRenderer::pathTracing_MVNEE_GaussPerturb(const vec3& rayOrigin, const
 * @param currentColorThroughput:  color threoughput of the path from start to the vertex at "estimatorIndex"
 * @return: the MIS weighted contribution of the path
 */
-vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, const int estimatorIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput)
+vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, const int estimatorIndex, int lightSourceIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput)
 {
 	const int segmentCount = path->getSegmentLength();
 	assert(path->getVertexCount() >= 2);
@@ -3105,11 +4721,17 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 	assert(estimatorIndex < segmentCount);
 	vec3 errorValue(0.0f); //returned in case of errors
 
+	LightSource* hitLightSource = scene->lightSources[lightSourceIndex];
+
+	vec3 lastDirection;
+	vec3 lightVertex = path->getVertexPosition(segmentCount);
+
 	//special case: light was immediately hit after 1 segment:
 	if (path->getVertexCount() == 2) {
-		return scene->lightSource->Le;
-	}
-
+		vec3 firstVertex = path->getVertexPosition(0);
+		vec3 dir = normalize(lightVertex - firstVertex);
+		return hitLightSource->getEmissionIntensity(lightVertex, dir);
+	}	
 
 	//get thread local pre-reservers data for this thread:
 	int threadID = omp_get_thread_num();
@@ -3165,19 +4787,15 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 			//contribute phase function * mu_s / BRDF depending on vertex
 			if (prevVert.vertexType == TYPE_SURFACE) {
 				//BRDF direction
-				ObjectData surfaceData;
-				scene->getObjectData(prevVert.geometryID, &surfaceData);
+				BSDF* bsdfData = scene->getBSDF(prevVert.geometryID);
 
-				float cosThetaBRDF = dot(prevVert.surfaceNormal, currentDir);
-				if (cosThetaBRDF <= 0.0f) {
-					cout << "wrong outgoing direction at surface!: cosTheta = " << cosThetaBRDF << endl;
+				if (!bsdfData->validOutputDirection(prevVert.surfaceNormal, currentDir)) {
+					cout << "wrong outgoing direction at surface!" << endl; 
 					return errorValue;
 				}
-				assert(cosThetaBRDF > 0.0f);
 
-				colorThroughput *= evalDiffuseBRDF(surfaceData.albedo);
-				measurementContrib *= (double)cosThetaBRDF;
-				pathTracingPDF *= diffuseBRDFSamplingPDF(prevVert.surfaceNormal, currentDir);
+				colorThroughput *= bsdfData->evalBSDF(prevVert.surfaceNormal, currentDir, previousDir);
+				pathTracingPDF *= bsdfData->getBSDFDirectionPDF(prevVert.surfaceNormal, currentDir, previousDir);
 			}
 			else {
 				//phase direction
@@ -3190,9 +4808,11 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 
 			if (i == segmentCount) {
 				//Light connection segment:
-				if (scene->lightSource->validHitDirection(currentDir)) {
+				if (hitLightSource->validHitDirection(currentDir)) {
+					lastDirection = currentDir;
+
 					//special treatment when light source was hit:
-					float cosLightF = dot(-currentDir, scene->lightSource->normal);
+					float cosLightF = dot(-currentDir, hitLightSource->normal);
 					assert(cosLightF >= 0.0f);
 					currG *= (double)cosLightF;
 
@@ -3227,6 +4847,10 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 			previousDir = currentDir;
 		}
 	}
+	else {
+		vec3 preLastVertex = path->getVertexPosition(segmentCount - 1);
+		lastDirection = normalize(lightVertex - preLastVertex);
+	}
 
 	//set path tracing pdf at index 0
 	tl_estimatorPDFs[0] = pathTracingPDF;
@@ -3238,7 +4862,6 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 	for (int e = firstPossibleMVNEEEstimatorIndex; e < segmentCount; e++) {
 		double pathTracingStartPDF = tl_cumulatedPathTracingPDFs[e]; //pdf for sampling the first vertices with path tracing
 		vec3 forkVertex = path->getVertexPosition(e); //last path tracing vertex and anchor point for the mvnee path
-		vec3 lightVertex = path->getVertexPosition(segmentCount);
 
 		vec3 forkToLight = lightVertex - forkVertex;
 		float distanceToLight = length(forkToLight);
@@ -3327,7 +4950,9 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 					if (lastSeedSegmentLength >= 0.0f) {
 						perturbationPDF *= exp(-medium.mu_t * (double)distanceToLight);
 
-						double finalEstimatorPDF = pathTracingStartPDF * scene->lightSource->getPositionSamplingPDF() * perturbationPDF;
+						double lightVertexSamplingPDF = scene->getLightVertexSamplingPDF(forkVertex, lightSourceIndex);
+
+						double finalEstimatorPDF = pathTracingStartPDF * lightVertexSamplingPDF * perturbationPDF;
 						if (isfinite(finalEstimatorPDF)) {
 							tl_estimatorPDFs[e] = finalEstimatorPDF;
 						}
@@ -3362,13 +4987,10 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 		if (isfinite(finalContribution)) {
 			assert(finalContribution >= 0.0);
 
-			//const int estimatorCount = segmentCount;
-			//float misWeight = misPowerWeight(finalPDF, tl_estimatorPDFs, estimatorCount);
-
 			int mvneeEstimatorCount = segmentCount - firstPossibleMVNEEEstimatorIndex;
 			float misWeight = misBalanceWeight(finalPDF, pathTracingPDF, &tl_estimatorPDFs[firstPossibleMVNEEEstimatorIndex], mvneeEstimatorCount);
 
-			vec3 finalPixel = misWeight * finalContribution * colorThroughput * scene->lightSource->Le;
+			vec3 finalPixel = misWeight * finalContribution * colorThroughput * hitLightSource->getEmissionIntensity(lightVertex, lastDirection);
 			return finalPixel;
 		}
 	}
@@ -3391,353 +5013,361 @@ vec3 VolumeRenderer::calcFinalWeightedContribution_ConstantsAlpha(Path* path, co
 * Further a lot of path tracing pdf and measurement contrib calcualtions are avoided by acumulating pdf and measurement contrib whilst
 * sampling the path.
 */
- vec3 VolumeRenderer::pathTracing_MVNEE_ConstantsAlpha(const vec3& rayOrigin, const vec3& rayDir)
- {
-	 //get thread local pre-reservers data for this thread:
-	 int threadID = omp_get_thread_num();
-	 Path* pathTracingPath = pathTracingPaths[threadID];
-	 vec3* tl_seedVertices = seedVertices[threadID];
-	 vec3* tl_perturbedVertices = perturbedVertices[threadID];
-	 float* tl_seedSegmentLengths = seedSegmentLengths[threadID];
-	 double* tl_seedSegmentLengthSquares = seedSegmentLengthSquares[threadID];
-
-	 double* tl_cumulativePathTracingPDFs = cumulatedPathTracingPDFs[threadID];
-	 tl_cumulativePathTracingPDFs[0] = 1.0;
-
-	 //add first Vertex
-	 PathVertex origin(rayOrigin, TYPE_ORIGIN, -1, rayDir);
-	 pathTracingPath->addVertex(origin);
-
-	 vec3 finalPixel(0.0f);
-
-	 vec3 currPosition = rayOrigin;
-	 vec3 currDir = rayDir;
-
-	 double pathTracingPDF = 1.0;
-	 double measurementContrib = 1.0;
-	 double newMeasurementContrib = 1.0;
-	 vec3 colorThroughput(1.0f);
-	 vec3 newColorThroughput(1.0f);
-
-	 //index of first vertex which could serve as a MVNEE estimator starting point
-	 int firstPossibleMVNEEEstimatorIndex = 1;
-
-
-	 while (pathTracingPath->getSegmentLength() < rendering.MAX_SEGMENT_COUNT) {
-		 //sanity check assertions:
-		 assert(pathTracingPath->getVertexCount() > 0);
-		 PathVertex lastPathVertex;
-		 pathTracingPath->getVertex(pathTracingPath->getSegmentLength(), lastPathVertex);
-		 assert(lastPathVertex.vertexType != TYPE_MVNEE);
-		 pathTracingPath->getVertex(pathTracingPath->getVertexCount() - 1, lastPathVertex);
-		 assert(lastPathVertex.vertexType != TYPE_MVNEE);
-
-		 //sample free path Lenth
-		 double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), medium.mu_t);
-
-		 //this is the starting vertex for MVNEE, depending on the intersection, it can either be a surface vertex or medium vertex
-		 PathVertex forkVertex;
-
-		 //intersect scene
-		 RTCRay ray;
-		 vec3 intersectionNormal;
-		 if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal) && ray.tfar <= freePathLength) {
-			 if (ray.tfar > Constants::epsilon) {
-
-				 //////////////////////////////
-				 // Surface interaction
-				 //////////////////////////////
-				 vec3 surfaceVertex = currPosition + ray.tfar * currDir;
-				 forkVertex.vertex = surfaceVertex;
-				 forkVertex.vertexType = TYPE_SURFACE;
-				 forkVertex.geometryID = ray.geomID;
-				 forkVertex.surfaceNormal = intersectionNormal;
-				 pathTracingPath->addVertex(forkVertex);
-
-				 if (scene->lightSource->lightIntersected(surfaceVertex)) {
-					 //////////////////////////////
-					 // Light hit
-					 //////////////////////////////
-
-					 //normal culling
-					 if (scene->lightSource->validHitDirection(currDir)) {
-
-						 //update contribution
-						 double transmittance = exp(-medium.mu_t * ray.tfar);
-						 float cosThetaLight = dot(-currDir, scene->lightSource->normal);
-						 double G = cosThetaLight / ((double)ray.tfar * (double)ray.tfar);
-						 measurementContrib *= transmittance * G;
-						 pathTracingPDF *= transmittance * G;
-						 tl_cumulativePathTracingPDFs[pathTracingPath->getSegmentLength()] = pathTracingPDF;
-
-						 //estimator Index for Path tracing is 0!
-						 vec3 finalContribution;
-						 if (pathTracingPath->getSegmentLength() > 1) {
-							 finalContribution = calcFinalWeightedContribution_ConstantsAlpha(pathTracingPath, 0, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
-						 }
-						 else {
-							 finalContribution = scene->lightSource->Le;
-						 }
-
-						 finalPixel += finalContribution;
-					 }
-					 break;
-				 }
-
-				 //surface normal culling:
-				 if (dot(intersectionNormal, -currDir) <= 0.0f) {
-					 break;
-				 }
-
-
-				 //update pdf and mc:
-				 double transmittance = exp(-medium.mu_t * ray.tfar);
-				 float cosThetaSurface = dot(-currDir, intersectionNormal);
-				 double G = cosThetaSurface / ((double)ray.tfar * (double)ray.tfar);
-				 measurementContrib *= transmittance * G;
-				 pathTracingPDF *= transmittance * G;
-				 tl_cumulativePathTracingPDFs[pathTracingPath->getSegmentLength()] = pathTracingPDF;
-
-				 //update index for MVNEE start vertex:
-				 firstPossibleMVNEEEstimatorIndex = pathTracingPath->getSegmentLength();
-
-
-				 //sample direction based on BRDF:
-				 vec3 newDir = sampleDiffuseBRDFDir(intersectionNormal, sample1D(threadID), sample1D(threadID));
-
-				 //update pdf, measurement contrib and colorThroughput for BRDF-interaction:
-				 double dirSamplingPDF = diffuseBRDFSamplingPDF(intersectionNormal, newDir);
-				 float cos_theta_surface = dot(intersectionNormal, newDir);
-				 newMeasurementContrib = measurementContrib * (double)cos_theta_surface;
-				 pathTracingPDF *= dirSamplingPDF;
-				 ObjectData surfaceData;
-				 scene->getObjectData(ray.geomID, &surfaceData);
-				 newColorThroughput = colorThroughput * evalDiffuseBRDF(surfaceData.albedo);
-
-				 //update variables:
-				 currPosition = surfaceVertex + Constants::epsilon * intersectionNormal;
-				 currDir = newDir;
-			 }
-			 else {
-				 break;
-			 }
-		 }
-		 else {
-			 //////////////////////////////
-			 // Medium interaction
-			 //////////////////////////////
-			 vec3 nextScatteringVertex = currPosition + (float)freePathLength * currDir;
-			 pathTracingPath->addMediumVertex(nextScatteringVertex, TYPE_MEDIUM);
-
-
-			 //update pdf and mc:
-			 double transmittance = exp(-medium.mu_t * freePathLength);
-			 double G = 1.0 / ((double)freePathLength * (double)freePathLength);
-			 if (!isfinite(G)) {
-				 break;
-			 }
-			 assert(isfinite(G));
-			 measurementContrib *= transmittance * G;
-			 pathTracingPDF *= medium.mu_t * transmittance * G;
-			 tl_cumulativePathTracingPDFs[pathTracingPath->getSegmentLength()] = pathTracingPDF;
-
-
-			 //sample direction based on Henyey-Greenstein:
-			 vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), medium.hg_g_F);
-
-			 //update pdf and mc for phase function
-			 float cos_theta_Phase = dot(currDir, newDir);
-			 double phase = (double)henyeyGreenstein(cos_theta_Phase, medium.hg_g_F);
-			 newMeasurementContrib = measurementContrib * medium.mu_s * phase;
-			 pathTracingPDF *= phase;
-
-			 //update variables:
-			 forkVertex.vertex = nextScatteringVertex;
-			 forkVertex.vertexType = TYPE_MEDIUM;
-			 forkVertex.geometryID = -1;
-			 forkVertex.surfaceNormal = vec3(0.0f);
-
-			 currPosition = nextScatteringVertex;
-			 currDir = newDir;
-		 }
-
-		 int lastPathTracingVertexIndex = pathTracingPath->getSegmentLength();
-		 if (lastPathTracingVertexIndex >= rendering.MAX_SEGMENT_COUNT) {
-			 break;
-		 }
-
-		 //////////////////////////////
-		 // MVNEE
-		 //////////////////////////////		
-
-		 //first sample a light vertex
-		 vec3 lightVertex = scene->lightSource->sampleLightPosition(sample1D(threadID), sample1D(threadID));
-		 vec3 forkToLight = lightVertex - forkVertex.vertex;
-		 float distanceToLight = length(forkToLight);
-		 if (distanceToLight > Constants::epsilon) {
-
-			 //only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
-			 float expectedSegments = distanceToLight / medium.meanFreePathF;
-			 if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
-
-				 vec3 omega = forkToLight / distanceToLight; //direction of the line to the light source
-
-				 vec3 u, v;
-				 coordinateSystem(omega, u, v); //build tangent frame: (same for every seed vertex)
-
-				 //sample the segment lengths for the seed path:
-				 int mvneeSegmentCount;
-
-				 bool validPath = sampleSeedSegmentLengths(distanceToLight, tl_seedSegmentLengths, tl_seedSegmentLengthSquares, &mvneeSegmentCount, threadID);
-
-				 //special case: surface normal culling for only one segment:
-				 if (validPath && mvneeSegmentCount == 1) {
-					 if (forkVertex.vertexType == TYPE_SURFACE) {
-						 float cosThetaSurface = dot(omega, forkVertex.surfaceNormal);
-						 if (cosThetaSurface <= 0.0f) {
-							 validPath = false;
-						 }
-					 }
-					 //light normal culling!
-					 if (!scene->lightSource->validHitDirection(omega)) {
-						 validPath = false;
-					 }
-				 }
-
-				 if (validPath && mvneeSegmentCount > 0) {
-					 //consider max segment length:
-					 if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= rendering.MAX_SEGMENT_COUNT) {
-
-						 //determine seed vertices based on sampled segment lengths:
-						 vec3 prevVertex = forkVertex.vertex;
-						 for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
-							 vec3 newSeedVertex = prevVertex + tl_seedSegmentLengths[s] * omega;
-							 tl_seedVertices[s] = newSeedVertex;
-							 prevVertex = newSeedVertex;
-						 }
-						 //add light vertex
-						 tl_seedVertices[mvneeSegmentCount - 1] = lightVertex;
-
-						 ////////////////////////////
-						 //  perturb all vertices but the lightDiskVertex:
-						 ////////////////////////////
-						 vec3 previousPerturbedVertex = forkVertex.vertex;
-
-						 vec3 seedVertex;
-						 vec3 perturbedVertex;
-						 bool validMVNEEPath = true;
-
-						 for (int p = 0; p < (mvneeSegmentCount - 1); p++) {
-							 seedVertex = tl_seedVertices[p];
-
-							 //sanity check: distances to start and end may not be <= 0
-							 float distanceToLineEnd = length(lightVertex - seedVertex);
-							 float distanceToLineStart = length(seedVertex - forkVertex.vertex);
-							 if (distanceToLineEnd <= 0.0f || distanceToLineStart <= 0.0f) {
-								 validMVNEEPath = false;
-								 break;
-							 }
-
-							 double finalGGXAlpha = sigmaForHG * Constants::GGX_CONVERSION_Constants; //conversion with Constants factor
-
-							 //perform perturbation using ggx radius and uniform angle in u,v plane 
-							 perturbVertexGGX2D(finalGGXAlpha, u, v, seedVertex, &perturbedVertex, threadID);
-
-							 float maxT = tl_seedSegmentLengths[p];
-
-							 //for first perturbed vertex, check if perturbation violates the normal culling condition on the surface!
-							 if (p == 0 && forkVertex.vertexType == TYPE_SURFACE) {
-								 vec3 forkToFirstPerturbed = perturbedVertex - forkVertex.vertex;
-								 float firstDistToPerturbed = length(forkToFirstPerturbed);
-								 if (firstDistToPerturbed > 0.0f) {
-									 forkToFirstPerturbed /= firstDistToPerturbed;
-									 float cosThetaSurface = dot(forkToFirstPerturbed, forkVertex.surfaceNormal);
-									 if (cosThetaSurface <= 0.0f) {
-										 validMVNEEPath = false;
-										 break;
-									 }
-								 }
-								 else {
-									 validMVNEEPath = false;
-									 break;
-								 }
-
-								 previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
-
-								 maxT -= Constants::epsilon;
-								 if (maxT <= 0.0f) {
-									 validMVNEEPath = false;
-									 break;
-								 }
-							 }
-
-							 //visibility check:							 
-							 vec3 visibilityDirection = normalize(perturbedVertex - previousPerturbedVertex);
-
-							 RTCRay shadowRay;
-							 if (scene->surfaceOccluded(previousPerturbedVertex, visibilityDirection, maxT, shadowRay)) {
-								 validMVNEEPath = false;
-								 break;
-							 }
-
-							 //add vertex to path
-							 pathTracingPath->addMediumVertex(perturbedVertex, TYPE_MVNEE);
-							 previousPerturbedVertex = perturbedVertex;
-						 }
-
-						 if (validMVNEEPath) {
-							 vec3 lastSegmentDir = lightVertex - previousPerturbedVertex;
-							 float lastSegmentLength = length(lastSegmentDir);
-							 if (lastSegmentLength > 0.0f) {
-								 assert(lastSegmentLength > 0.0f);
-								 lastSegmentDir /= lastSegmentLength;
-
-								 //visibility check: first potential normal culling:
-								 if (scene->lightSource->validHitDirection(lastSegmentDir)) {
-
-									 if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
-										 previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
-
-										 if (lastSegmentLength - Constants::epsilon > 0.0f) {
-											 lastSegmentLength -= Constants::epsilon;
-										 }
-									 }
-
-									 //occlusion check:
-									 RTCRay lastShadowRay;
-									 if (!scene->surfaceOccluded(previousPerturbedVertex, lastSegmentDir, lastSegmentLength, lastShadowRay)) {
-										 PathVertex lightVertexStruct(lightVertex, TYPE_MVNEE, -1, scene->lightSource->normal);
-										 pathTracingPath->addVertex(lightVertexStruct);
-
-										 //calculate measurement constribution, pdf and mis weight:
-										 //estimator Index for MVNEE is index of last path tracing vertex
-										 //make sure the last path tracing vertex index is set correctly in order to use the correct PDF
-										 vec3 finalContribution = calcFinalWeightedContribution_ConstantsAlpha(pathTracingPath, lastPathTracingVertexIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
-										 finalPixel += finalContribution;
-									 }
-								 }
-							 }
-							 else {
-								 //cout << "last MVNEE segment length <= 0: " << lastSegmentLength << endl;
-							 }
-						 }
-					 }
-					 //delete all MVNEE vertices from the path construct, so path racing stays correct
-					 pathTracingPath->cutMVNEEVertices();
-				 }
-
-			 }
-		 }
-
-		 measurementContrib = newMeasurementContrib;
-		 colorThroughput = newColorThroughput;
-	 }
-
-	 //Path sampling finished: now reset Path, so it can be filled again
-	 pathTracingPath->reset();
-
-	 return finalPixel;
- }
+vec3 VolumeRenderer::pathTracing_MVNEE_ConstantsAlpha(const vec3& rayOrigin, const vec3& rayDir)
+{
+	//get thread local pre-reservers data for this thread:
+	int threadID = omp_get_thread_num();
+	Path* pathTracingPath = pathTracingPaths[threadID];
+	vec3* tl_seedVertices = seedVertices[threadID];
+	vec3* tl_perturbedVertices = perturbedVertices[threadID];
+	float* tl_seedSegmentLengths = seedSegmentLengths[threadID];
+	double* tl_seedSegmentLengthSquares = seedSegmentLengthSquares[threadID];
+
+	double* tl_cumulativePathTracingPDFs = cumulatedPathTracingPDFs[threadID];
+	tl_cumulativePathTracingPDFs[0] = 1.0;
+
+	//add first Vertex
+	PathVertex origin(rayOrigin, TYPE_ORIGIN, -1, rayDir);
+	pathTracingPath->addVertex(origin);
+
+	vec3 finalPixel(0.0f);
+
+	vec3 currPosition = rayOrigin;
+	vec3 currDir = rayDir;
+
+	double pathTracingPDF = 1.0;
+	double measurementContrib = 1.0;
+	double newMeasurementContrib = 1.0;
+	vec3 colorThroughput(1.0f);
+	vec3 newColorThroughput(1.0f);
+
+	//index of first vertex which could serve as a MVNEE estimator starting point
+	int firstPossibleMVNEEEstimatorIndex = 1;
+
+
+	while (pathTracingPath->getSegmentLength() < rendering.MAX_SEGMENT_COUNT) {
+		//sanity check assertions:
+		assert(pathTracingPath->getVertexCount() > 0);
+		PathVertex lastPathVertex;
+		pathTracingPath->getVertex(pathTracingPath->getSegmentLength(), lastPathVertex);
+		assert(lastPathVertex.vertexType != TYPE_MVNEE);
+		pathTracingPath->getVertex(pathTracingPath->getVertexCount() - 1, lastPathVertex);
+		assert(lastPathVertex.vertexType != TYPE_MVNEE);
+
+		//sample free path Lenth
+		double freePathLength = sampleFreePathLength(sample1DOpenInterval(threadID), medium.mu_t);
+
+		//this is the starting vertex for MVNEE, depending on the intersection, it can either be a surface vertex or medium vertex
+		PathVertex forkVertex;
+
+		//intersect scene
+		RTCRay ray;
+		vec3 intersectionNormal;
+		if (scene->intersectScene(currPosition, currDir, ray, intersectionNormal) && ray.tfar <= freePathLength) {
+			if (ray.tfar > Constants::epsilon) {
+
+				//////////////////////////////
+				// Surface interaction
+				//////////////////////////////
+				vec3 surfaceVertex = currPosition + ray.tfar * currDir;
+				forkVertex.vertex = surfaceVertex;
+				forkVertex.vertexType = TYPE_SURFACE;
+				forkVertex.geometryID = ray.geomID;
+				forkVertex.surfaceNormal = intersectionNormal;
+				pathTracingPath->addVertex(forkVertex);
+
+				int hitLightIndex;
+				if (scene->lightIntersected(surfaceVertex, &hitLightIndex)) {
+					//////////////////////////////
+					// Light hit
+					//////////////////////////////
+					LightSource* hitLight = scene->lightSources[hitLightIndex];
+
+					//normal culling
+					if (hitLight->validHitDirection(currDir)) {
+
+						//update contribution
+						double transmittance = exp(-medium.mu_t * ray.tfar);
+						float cosThetaLight = dot(-currDir, hitLight->normal);
+						double G = cosThetaLight / ((double)ray.tfar * (double)ray.tfar);
+						measurementContrib *= transmittance * G;
+						pathTracingPDF *= transmittance * G;
+						tl_cumulativePathTracingPDFs[pathTracingPath->getSegmentLength()] = pathTracingPDF;
+
+						//estimator Index for Path tracing is 0!
+						vec3 finalContribution;
+						if (pathTracingPath->getSegmentLength() > 1) {
+							finalContribution = calcFinalWeightedContribution_ConstantsAlpha(pathTracingPath, 0, hitLightIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
+						}
+						else {
+							finalContribution = hitLight->getEmissionIntensity(surfaceVertex, currDir);
+						}
+
+						finalPixel += finalContribution;
+					}
+					break;
+				}
+
+				//surface normal culling:
+				if (dot(intersectionNormal, -currDir) <= 0.0f) {
+					break;
+				}
+
+
+				//update pdf and mc:
+				double transmittance = exp(-medium.mu_t * ray.tfar);
+				float cosThetaSurface = dot(-currDir, intersectionNormal);
+				double G = cosThetaSurface / ((double)ray.tfar * (double)ray.tfar);
+				measurementContrib *= transmittance * G;
+				pathTracingPDF *= transmittance * G;
+				tl_cumulativePathTracingPDFs[pathTracingPath->getSegmentLength()] = pathTracingPDF;
+
+				//update index for MVNEE start vertex:
+				firstPossibleMVNEEEstimatorIndex = pathTracingPath->getSegmentLength();
+
+
+				BSDF* bsdfData = scene->getBSDF(ray.geomID);
+				//sample direction based on BRDF:
+				vec3 newDir = bsdfData->sampleBSDFDirection(intersectionNormal, currDir, sample1D(threadID), sample1D(threadID)); 
+				if (!bsdfData->validOutputDirection(intersectionNormal, newDir)) {
+					break;
+				}
+
+				//update pdf, measurement contrib and colorThroughput for BRDF-interaction:
+				double dirSamplingPDF = bsdfData->getBSDFDirectionPDF(intersectionNormal, newDir, currDir);
+				newMeasurementContrib = measurementContrib;
+				pathTracingPDF *= dirSamplingPDF;
+				ObjectData surfaceData;
+				scene->getObjectData(ray.geomID, &surfaceData);
+				newColorThroughput = colorThroughput * bsdfData->evalBSDF(intersectionNormal, newDir, currDir);
+
+				//update variables:
+				currPosition = surfaceVertex + Constants::epsilon * intersectionNormal;
+				currDir = newDir;
+			}
+			else {
+				break;
+			}
+		}
+		else {
+			//////////////////////////////
+			// Medium interaction
+			//////////////////////////////
+			vec3 nextScatteringVertex = currPosition + (float)freePathLength * currDir;
+			pathTracingPath->addMediumVertex(nextScatteringVertex, TYPE_MEDIUM);
+
+
+			//update pdf and mc:
+			double transmittance = exp(-medium.mu_t * freePathLength);
+			double G = 1.0 / ((double)freePathLength * (double)freePathLength);
+			if (!isfinite(G)) {
+				break;
+			}
+			assert(isfinite(G));
+			measurementContrib *= transmittance * G;
+			pathTracingPDF *= medium.mu_t * transmittance * G;
+			tl_cumulativePathTracingPDFs[pathTracingPath->getSegmentLength()] = pathTracingPDF;
+
+
+			//sample direction based on Henyey-Greenstein:
+			vec3 newDir = sampleHenyeyGreensteinDirection(currDir, sample1D(threadID), sample1D(threadID), medium.hg_g_F);
+
+			//update pdf and mc for phase function
+			float cos_theta_Phase = dot(currDir, newDir);
+			double phase = (double)henyeyGreenstein(cos_theta_Phase, medium.hg_g_F);
+			newMeasurementContrib = measurementContrib * medium.mu_s * phase;
+			pathTracingPDF *= phase;
+
+			//update variables:
+			forkVertex.vertex = nextScatteringVertex;
+			forkVertex.vertexType = TYPE_MEDIUM;
+			forkVertex.geometryID = -1;
+			forkVertex.surfaceNormal = vec3(0.0f);
+
+			currPosition = nextScatteringVertex;
+			currDir = newDir;
+		}
+
+		int lastPathTracingVertexIndex = pathTracingPath->getSegmentLength();
+		if (lastPathTracingVertexIndex >= rendering.MAX_SEGMENT_COUNT) {
+			break;
+		}
+
+		//////////////////////////////
+		// MVNEE
+		//////////////////////////////		
+
+		//first sample a light vertex
+		int sampledLightIndex;
+		vec3 lightVertex = scene->sampleLightPosition(forkVertex.vertex, sample1D(threadID), sample1D(threadID), sample1D(threadID), &sampledLightIndex);
+		if (sampledLightIndex > -1) {
+			LightSource* sampledLightSource = scene->lightSources[sampledLightIndex];
+			vec3 forkToLight = lightVertex - forkVertex.vertex;
+			float distanceToLight = length(forkToLight);
+			if (distanceToLight > Constants::epsilon) {
+
+				//only perform MVNEE if the expected segment count is smaller than MAX_MVNEE_SEGMENTS
+				float expectedSegments = distanceToLight / medium.meanFreePathF;
+				if (isfinite(expectedSegments) && expectedSegments > 0.0f && expectedSegments <= rendering.MAX_MVNEE_SEGMENTS_F) {
+
+					vec3 omega = forkToLight / distanceToLight; //direction of the line to the light source
+
+					vec3 u, v;
+					coordinateSystem(omega, u, v); //build tangent frame: (same for every seed vertex)
+
+					//sample the segment lengths for the seed path:
+					int mvneeSegmentCount;
+
+					bool validPath = sampleSeedSegmentLengths(distanceToLight, tl_seedSegmentLengths, tl_seedSegmentLengthSquares, &mvneeSegmentCount, threadID);
+
+					//special case: surface normal culling for only one segment:
+					if (validPath && mvneeSegmentCount == 1) {
+						if (forkVertex.vertexType == TYPE_SURFACE) {
+							float cosThetaSurface = dot(omega, forkVertex.surfaceNormal);
+							if (cosThetaSurface <= 0.0f) {
+								validPath = false;
+							}
+						}
+						//light normal culling!
+						if (!sampledLightSource->validHitDirection(omega)) {
+							validPath = false;
+						}
+					}
+
+					if (validPath && mvneeSegmentCount > 0) {
+						//consider max segment length:
+						if (pathTracingPath->getSegmentLength() + mvneeSegmentCount <= rendering.MAX_SEGMENT_COUNT) {
+
+							//determine seed vertices based on sampled segment lengths:
+							vec3 prevVertex = forkVertex.vertex;
+							for (int s = 0; s < (mvneeSegmentCount - 1); s++) {
+								vec3 newSeedVertex = prevVertex + tl_seedSegmentLengths[s] * omega;
+								tl_seedVertices[s] = newSeedVertex;
+								prevVertex = newSeedVertex;
+							}
+							//add light vertex
+							tl_seedVertices[mvneeSegmentCount - 1] = lightVertex;
+
+							////////////////////////////
+							//  perturb all vertices but the lightDiskVertex:
+							////////////////////////////
+							vec3 previousPerturbedVertex = forkVertex.vertex;
+
+							vec3 seedVertex;
+							vec3 perturbedVertex;
+							bool validMVNEEPath = true;
+
+							for (int p = 0; p < (mvneeSegmentCount - 1); p++) {
+								seedVertex = tl_seedVertices[p];
+
+								//sanity check: distances to start and end may not be <= 0
+								float distanceToLineEnd = length(lightVertex - seedVertex);
+								float distanceToLineStart = length(seedVertex - forkVertex.vertex);
+								if (distanceToLineEnd <= 0.0f || distanceToLineStart <= 0.0f) {
+									validMVNEEPath = false;
+									break;
+								}
+
+								double finalGGXAlpha = sigmaForHG * Constants::GGX_CONVERSION_Constants; //conversion with Constants factor
+
+								//perform perturbation using ggx radius and uniform angle in u,v plane 
+								perturbVertexGGX2D(finalGGXAlpha, u, v, seedVertex, &perturbedVertex, threadID);
+
+								float maxT = tl_seedSegmentLengths[p];
+
+								//for first perturbed vertex, check if perturbation violates the normal culling condition on the surface!
+								if (p == 0 && forkVertex.vertexType == TYPE_SURFACE) {
+									vec3 forkToFirstPerturbed = perturbedVertex - forkVertex.vertex;
+									float firstDistToPerturbed = length(forkToFirstPerturbed);
+									if (firstDistToPerturbed > 0.0f) {
+										forkToFirstPerturbed /= firstDistToPerturbed;
+										float cosThetaSurface = dot(forkToFirstPerturbed, forkVertex.surfaceNormal);
+										if (cosThetaSurface <= 0.0f) {
+											validMVNEEPath = false;
+											break;
+										}
+									}
+									else {
+										validMVNEEPath = false;
+										break;
+									}
+
+									previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+
+									maxT -= Constants::epsilon;
+									if (maxT <= 0.0f) {
+										validMVNEEPath = false;
+										break;
+									}
+								}
+
+								//visibility check:							 
+								vec3 visibilityDirection = normalize(perturbedVertex - previousPerturbedVertex);
+
+								RTCRay shadowRay;
+								if (scene->vertexOccluded(previousPerturbedVertex, visibilityDirection, maxT, shadowRay)) {
+									validMVNEEPath = false;
+									break;
+								}
+
+								//add vertex to path
+								pathTracingPath->addMediumVertex(perturbedVertex, TYPE_MVNEE);
+								previousPerturbedVertex = perturbedVertex;
+							}
+
+							if (validMVNEEPath) {
+								vec3 lastSegmentDir = lightVertex - previousPerturbedVertex;
+								float lastSegmentLength = length(lastSegmentDir);
+								if (lastSegmentLength > 0.0f) {
+									assert(lastSegmentLength > 0.0f);
+									lastSegmentDir /= lastSegmentLength;
+
+									//visibility check: first potential normal culling:
+									if (sampledLightSource->validHitDirection(lastSegmentDir)) {
+
+										if (mvneeSegmentCount == 1 && forkVertex.vertexType == TYPE_SURFACE) {
+											previousPerturbedVertex = forkVertex.vertex + Constants::epsilon * forkVertex.surfaceNormal;
+
+											if (lastSegmentLength - Constants::epsilon > 0.0f) {
+												lastSegmentLength -= Constants::epsilon;
+											}
+										}
+
+										//occlusion check:
+										RTCRay lastShadowRay;
+										if (!scene->vertexOccluded(previousPerturbedVertex, lastSegmentDir, lastSegmentLength, lastShadowRay)) {
+											PathVertex lightVertexStruct(lightVertex, TYPE_MVNEE, -1, sampledLightSource->normal);
+											pathTracingPath->addVertex(lightVertexStruct);
+
+											//calculate measurement constribution, pdf and mis weight:
+											//estimator Index for MVNEE is index of last path tracing vertex
+											//make sure the last path tracing vertex index is set correctly in order to use the correct PDF
+											vec3 finalContribution = calcFinalWeightedContribution_ConstantsAlpha(pathTracingPath, lastPathTracingVertexIndex, sampledLightIndex, firstPossibleMVNEEEstimatorIndex, measurementContrib, colorThroughput);
+											finalPixel += finalContribution;
+										}
+									}
+								}
+								else {
+									//cout << "last MVNEE segment length <= 0: " << lastSegmentLength << endl;
+								}
+							}
+						}
+						//delete all MVNEE vertices from the path construct, so path racing stays correct
+						pathTracingPath->cutMVNEEVertices();
+					}
+
+				}
+			}
+		}
+		measurementContrib = newMeasurementContrib;
+		colorThroughput = newColorThroughput;
+	}
+
+	//Path sampling finished: now reset Path, so it can be filled again
+	pathTracingPath->reset();
+
+	return finalPixel;
+}
 
 /** Perturb a vertex on the tangent plane using a ggx sampled radius, and a uniformly sampled angle
 * @param input: vector that has to be perturbed
@@ -3968,12 +5598,14 @@ void VolumeRenderer::printRenderingParameters(int sampleCount, double duration)
 		case TEST_RENDERING: o << "Test Rendering" << endl; break;
 		case PATH_TRACING_NO_SCATTERING: o << "Path Tracing, no medium interaction" << endl; break;
 		case PATH_TRACING_NEE_MIS_NO_SCATTERING: o << "Path Tracing with NEE and MIS, no medium interaction" << endl; break;
-		case PATH_TRACING_RANDOM_WALK: o << "Path Tracing in homogeneous medium" << endl; break;
-		case PATH_TRACING_NEE_MIS: o << "Path Tracing with NEE and MIS in homogeneous medium" << endl; break;
-		case PATH_TRACING_MVNEE: o << "Path Tracing with MVNEE and MIS in homogeneous medium" << endl; break;
+		case PATH_TRACING_RANDOM_WALK: o << "Path Tracing" << endl; break;
+		case PATH_TRACING_NEE_MIS: o << "Path Tracing with NEE and MIS" << endl; break;
+		case PATH_TRACING_MVNEE: o << "Path Tracing with MVNEE and MIS" << endl; break;
 		case PATH_TRACING_MVNEE_FINAL: o << "Path Tracing with MVNEE and MIS in homogeneous medium: final optimized version" << endl; break;
-		case PATH_TRACING_MVNEE_GAUSS_PERTURB: o << "Path Tracing with MVNEE and MIS in homogeneous medium - Gauss perturbation!" << endl; break;
-		case PATH_TRACING_MVNEE_Constants_ALPHA: o << "Path Tracing with MVNEE and MIS in homogeneous medium - GGX perturbation with Constants ALPHA!" << endl; break;
+		case PATH_TRACING_MVNEE_LIGHT_IMPORTANCE_SAMPLING: o << "Path Tracing with MVNEE and MIS: Light Importance sampling via one sampled light segment." << endl; break;
+		case PATH_TRACING_MVNEE_LIGHT_IMPORTANCE_SAMPLING_IMPROVED: o << "Path Tracing with MVNEE and MIS: Light Importance sampling via one sampled light segment. Improved due to one-segment-connection case." << endl; break;
+		case PATH_TRACING_MVNEE_GAUSS_PERTURB: o << "Path Tracing with MVNEE and MIS - Gauss perturbation!" << endl; break;
+		case PATH_TRACING_MVNEE_Constants_ALPHA: o << "Path Tracing with MVNEE and MIS - GGX perturbation with Constants ALPHA!" << endl; break;
 		default: o << "DEFAULT: Integrator unknown!" << endl; break;
 	}
 	o << endl;
@@ -3981,9 +5613,12 @@ void VolumeRenderer::printRenderingParameters(int sampleCount, double duration)
 	o << "Num Samples: " << sampleCount << endl;
 	o << "maximum path length: " << rendering.MAX_SEGMENT_COUNT << endl;
 	o << "maximum expected MVNEE segments: " << rendering.MAX_MVNEE_SEGMENTS << endl;
+	o << "light choice sampling: "; scene->printLightChoiceStrategy(o);
 	o << endl;
-	scene->lightSource->printParameters(o);	
-	o << endl;
+	for (int i = 0; i < scene->lightSourceCount; i++) {
+		scene->lightSources[i]->printParameters(o);
+		o << endl;
+	}
 	o << "mu_s: " << medium.mu_s << endl;
 	o << "mu_a: " << medium.mu_a << endl;
 	o << "mu_t: " << medium.mu_t << endl;
@@ -4096,3 +5731,4 @@ void VolumeRenderer::perturbVertexGaussian2D(const double& sigma, const vec3& u,
 
 	*output = out;
 }
+

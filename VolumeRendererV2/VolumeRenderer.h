@@ -1,7 +1,7 @@
 #pragma once
 
 //Compilerflags: 
-#define NDEBUG
+//#define NDEBUG
 
 //set in order to enable OpenEXR, if libraries are set:
 //#define ENABLE_OPEN_EXR
@@ -115,9 +115,10 @@ private:
 	* @param estimatorIndex index of the estimator that created the path:
 	*			estimatorIndex = 0: path tracing
 	*			estimatorIndex > 0: MVNEE starting after i path tracing segments
+	* @param lightSourceIndex index of the light source, that this path ends on
 	* @return: the MIS weighted contribution of the path
 	*/
-	inline vec3 calcFinalWeightedContribution(Path* path, int estimatorIndex);
+	inline vec3 calcFinalWeightedContribution(Path* path, int estimatorIndex, int lightSourceIndex);
 
 
 	/**
@@ -145,9 +146,10 @@ private:
 	* @param estimatorIndex index of the estimator that created the path:
 	*			estimatorIndex = 0: path tracing
 	*			estimatorIndex > 0: MVNEE starting after i path tracing segments
+	* @param lightSourceIndex index of the light source, that this path ends on
 	* @return: the MIS weighted contribution of the path
 	*/
-	inline vec3 calcFinalWeightedContribution_FINAL(Path* path, int estimatorIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput);
+	inline vec3 calcFinalWeightedContribution_FINAL(Path* path, int estimatorIndex, int lightSourceIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput);
 
 
 	/**
@@ -177,12 +179,13 @@ private:
 	* @param estimatorIndex index of the estimator that created the path:
 	*			estimatorIndex = 0: path tracing
 	*			estimatorIndex > 0: MVNEE starting after i path tracing segments
+	* @param lightSourceIndex index of the light source, that this path ends on
 	* @param firstPossibleMVNEEEstimatorIndex index of the first vertex that can be used as the starting point for MVNEE
 	* @param currentMeasurementContrib: measurement contrib of the path from start to the vertex at "estimatorIndex"
 	* @param currentColorThroughput:  color threoughput of the path from start to the vertex at "estimatorIndex"
 	* @return: the MIS weighted contribution of the path
 	*/
-	inline vec3 calcFinalWeightedContribution_GaussPerturb(Path* path, const int estimatorIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput);
+	inline vec3 calcFinalWeightedContribution_GaussPerturb(Path* path, const int estimatorIndex, int lightSourceIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput);
 
 	/**
 	* Combination of path tracing with Multiple Vertex Next Event Estimation (MVNEE) for direct lighting calculation at vertices in the medium,
@@ -215,12 +218,13 @@ private:
 	* @param estimatorIndex index of the estimator that created the path:
 	*			estimatorIndex = 0: path tracing
 	*			estimatorIndex > 0: MVNEE starting after i path tracing segments
+	* @param lightSourceIndex index of the light source, that this path ends on
 	* @param firstPossibleMVNEEEstimatorIndex index of the first vertex that can be used as the starting point for MVNEE
 	* @param currentMeasurementContrib: measurement contrib of the path from start to the vertex at "estimatorIndex"
 	* @param currentColorThroughput:  color threoughput of the path from start to the vertex at "estimatorIndex"
 	* @return: the MIS weighted contribution of the path
 	*/
-	inline vec3 calcFinalWeightedContribution_ConstantsAlpha(Path* path, const int estimatorIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput);
+	inline vec3 calcFinalWeightedContribution_ConstantsAlpha(Path* path, const int estimatorIndex, int lightSourceIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput);
 
 	/**
 	* Combination of path tracing with Multiple Vertex Next Event Estimation (MVNEE) for direct lighting calculation at vertices in the medium,
@@ -237,6 +241,79 @@ private:
 	* sampling the path.
 	*/
 	vec3 pathTracing_MVNEE_ConstantsAlpha(const vec3& rayOrigin, const vec3& rayDir);
+
+
+
+
+	/**
+	* Calculates the measurement contribution as well as the path tracing PDF of the given path.
+	* On top of that, the PDFs of all MVNEE estimators are calculated. THIS VERSION samples one segment from the light source and attempts a connection to this new vertex.
+	*
+	* As a result, the contribution of the path is calculated using the pdf of the estimator that created the path originally.
+	* This contribution is weighted by the MIS weight using the estimator PDFs.
+	*
+	* For this method, the light is expected to be an area light, also all objects in the scene are expected to have a diffuse lambertian BRDF.
+	*
+	* @param path containing all vertices of the path from camera to light source, as well as surface information (normal objectID,etc.)
+	* @param estimatorIndex index of the estimator that created the path:
+	*			estimatorIndex = 0: path tracing
+	*			estimatorIndex > 0: MVNEE starting after i path tracing segments
+	* @param lightSourceIndex index of the light source, that this path ends on
+	* @return: the MIS weighted contribution of the path
+	*/
+	inline vec3 calcFinalWeightedContribution_LightImportanceSampling(Path* path, int estimatorIndex, int lightSourceIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput);
+
+
+	/**
+	* Combination of path tracing with Multiple Vertex Next Event Estimation (MVNEE) for direct lighting calculation at vertices in the medium,
+	* as well as on surfaces. Creates one path tracing path and multiple MVNEE pathsstarting at the given rayOrigin with the given direction.
+	* This function returns the MIS weighted summed contributions of all created paths from the given origin to the light source.
+	*
+	* THIS VERSION samples one segment from the light source and attempts a connection to this new vertex.
+	*
+	* The light in this integrator is expected to be an area light, also all objects in the scene are expected to have a diffuse lambertian BRDF.
+	*
+	* As MVNEE seed paths, a line connection is used. Seed distances are sampled using transmittance distance sampling.
+	* MVNEE perturbation is performed using GGX2D sampling in the u-v-plane of the seed vertices.
+	*/
+	vec3 pathTracing_MVNEE_LightImportanceSampling(const vec3& rayOrigin, const vec3& rayDir);
+
+
+	/**
+	* Calculates the measurement contribution as well as the path tracing PDF of the given path.
+	* On top of that, the PDFs of all MVNEE estimators are calculated. THIS VERSION samples one segment from the light source and attempts a connection to this new vertex.
+	* An extra one-segment-connection handling is provided.
+	*
+	* As a result, the contribution of the path is calculated using the pdf of the estimator that created the path originally.
+	* This contribution is weighted by the MIS weight using the estimator PDFs.
+	*
+	* For this method, the light is expected to be an area light, also all objects in the scene are expected to have a diffuse lambertian BRDF.
+	*
+	* @param path containing all vertices of the path from camera to light source, as well as surface information (normal objectID,etc.)
+	* @param estimatorIndex index of the estimator that created the path:
+	*			estimatorIndex = 0: path tracing
+	*			estimatorIndex > 0: MVNEE starting after i path tracing segments
+	* @param lightSourceIndex index of the light source, that this path ends on
+	* @return: the MIS weighted contribution of the path
+	*/
+	inline vec3 calcFinalWeightedContribution_LightImportanceSamplingImproved(Path* path, int estimatorIndex, int lightSourceIndex, const int firstPossibleMVNEEEstimatorIndex, const double& currentMeasurementContrib, const vec3& currentColorThroughput);
+
+
+	/**
+	* Combination of path tracing with Multiple Vertex Next Event Estimation (MVNEE) for direct lighting calculation at vertices in the medium,
+	* as well as on surfaces. Creates one path tracing path and multiple MVNEE pathsstarting at the given rayOrigin with the given direction.
+	* This function returns the MIS weighted summed contributions of all created paths from the given origin to the light source.
+	*
+	* THIS VERSION samples one segment from the light source and attempts a connection to this new vertex. An extra one-segment-connection handling is provided.
+	*
+	* The light in this integrator is expected to be an area light, also all objects in the scene are expected to have a diffuse lambertian BRDF.
+	*
+	* As MVNEE seed paths, a line connection is used. Seed distances are sampled using transmittance distance sampling.
+	* MVNEE perturbation is performed using GGX2D sampling in the u-v-plane of the seed vertices.
+	*/
+	vec3 pathTracing_MVNEE_LightImportanceSamplingImproved(const vec3& rayOrigin, const vec3& rayDir);
+
+
 
 	inline double sample1D(const int threadID);
 	inline double sample1DOpenInterval(const int threadID);

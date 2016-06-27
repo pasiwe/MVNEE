@@ -31,7 +31,7 @@ int main(int argc, const char* argv[])
 
 	//create and fill scene
 	Scene* sceneObject = new Scene(scene);
-
+	
 	Medium mediumSetting;
 	Rendering renderingSetting;
 	bool xmlParsingSuccessful = false;
